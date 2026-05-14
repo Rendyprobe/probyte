@@ -4,6 +4,7 @@ import path from "node:path";
 export type ServerEnv = {
   apiPort: number;
   corsOrigin: string;
+  trustProxy: boolean;
   publicAppUrl: string;
   supabaseUrl: string;
   supabaseServiceRoleKey: string;
@@ -24,6 +25,7 @@ loadDotEnv();
 export const env: ServerEnv = {
   apiPort: numberEnv("API_PORT", 8787),
   corsOrigin: stringEnv("CORS_ORIGIN", "http://localhost:5173"),
+  trustProxy: booleanEnv("TRUST_PROXY", false),
   publicAppUrl: stringEnv("PUBLIC_APP_URL", "http://localhost:5173"),
   supabaseUrl: firstStringEnv(["VITE_SUPABASE_URL", "NEXT_PUBLIC_SUPABASE_URL"], ""),
   supabaseServiceRoleKey: stringEnv("SUPABASE_SERVICE_ROLE_KEY", ""),
@@ -99,4 +101,10 @@ function firstStringEnv(keys: string[], fallback: string) {
 function numberEnv(key: string, fallback: number) {
   const value = Number(process.env[key]);
   return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+function booleanEnv(key: string, fallback: boolean) {
+  const value = process.env[key]?.trim().toLowerCase();
+  if (!value) return fallback;
+  return value === "1" || value === "true" || value === "yes";
 }

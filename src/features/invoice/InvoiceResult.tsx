@@ -42,7 +42,7 @@ export function InvoiceResult({
       <div className="detail-grid">
         <DetailItem label="Varian" value={order.variantName} />
         <DetailItem label="Qty" value={order.qty} />
-        <DetailItem label="WhatsApp" value={order.customerWhatsapp} />
+        {order.customerWhatsapp ? <DetailItem label="WhatsApp" value={order.customerWhatsapp} /> : null}
         <DetailItem label="Metode" value={paymentLabel(order.paymentMethod)} />
         <DetailItem label="Subtotal" value={rupiah.format(order.subtotal)} />
         <DetailItem label="Diskon" value={order.discount ? rupiah.format(order.discount) : "-"} />

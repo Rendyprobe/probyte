@@ -47,6 +47,7 @@ export function ProByteApp() {
   const [cloudSync, setCloudSync] = useState<CloudSyncState>("idle");
   const [topUpAmount, setTopUpAmount] = useState(50000);
   const [claimInvoice, setClaimInvoice] = useState("");
+  const [claimInvoiceToken, setClaimInvoiceToken] = useState("");
   const [claimIssue, setClaimIssue] = useState("");
   const [selectedInvoiceToken, setSelectedInvoiceToken] = useState("");
   const [remoteInvoiceOrder, setRemoteInvoiceOrder] = useState<Order | null>(null);
@@ -588,8 +589,10 @@ export function ProByteApp() {
     }
 
     try {
-      await apiPost("/api/warranty-claims", { invoiceNumber, issueSummary }, { token: session.access_token });
+      const invoiceToken = claimInvoiceToken.trim() || (invoiceNumber === selectedInvoice ? selectedInvoiceToken : "");
+      await apiPost("/api/warranty-claims", { invoiceNumber, invoiceToken, issueSummary }, { token: session.access_token });
       setClaimInvoice("");
+      setClaimInvoiceToken("");
       setClaimIssue("");
       pushToast("Klaim dibuat. Lanjutkan chat admin dengan mengirim invoice.", "success");
     } catch (error) {
@@ -867,6 +870,7 @@ export function ProByteApp() {
 	            authReady={authReady}
 	            authSubmitting={authSubmitting}
 	            claimInvoice={claimInvoice}
+	            claimInvoiceToken={claimInvoiceToken}
 	            claimIssue={claimIssue}
 	            claims={currentUserClaims}
 	            cloudSync={cloudSync}
@@ -877,6 +881,7 @@ export function ProByteApp() {
 	            walletBalance={walletBalance}
 	            onAuth={handleAuth}
 	            onClaimInvoiceChange={setClaimInvoice}
+	            onClaimInvoiceTokenChange={setClaimInvoiceToken}
 	            onClaimIssueChange={setClaimIssue}
 	            onLogout={handleLogout}
 	            onModeChange={setAuthMode}

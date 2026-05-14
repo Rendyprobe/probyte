@@ -13,6 +13,7 @@ export function AccountView({
   authReady,
   authSubmitting,
   claimInvoice,
+  claimInvoiceToken,
   claimIssue,
   claims,
   cloudSync,
@@ -23,6 +24,7 @@ export function AccountView({
   walletBalance,
   onAuth,
   onClaimInvoiceChange,
+  onClaimInvoiceTokenChange,
   onClaimIssueChange,
   onEmailChange,
   onLogout,
@@ -40,6 +42,7 @@ export function AccountView({
   authReady: boolean;
   authSubmitting: boolean;
   claimInvoice: string;
+  claimInvoiceToken: string;
   claimIssue: string;
   claims: WarrantyClaim[];
   cloudSync: CloudSyncState;
@@ -50,6 +53,7 @@ export function AccountView({
   walletBalance: number;
   onAuth: (event: FormEvent<HTMLFormElement>) => void;
   onClaimInvoiceChange: (value: string) => void;
+  onClaimInvoiceTokenChange: (value: string) => void;
   onClaimIssueChange: (value: string) => void;
   onEmailChange: (value: string) => void;
   onLogout: () => void;
@@ -149,6 +153,10 @@ export function AccountView({
             <label className="field">
               <span>Invoice</span>
               <input value={claimInvoice} onChange={(event) => onClaimInvoiceChange(event.target.value)} placeholder="PBY-20260512-8F3K2A" />
+            </label>
+            <label className="field">
+              <span>Token invoice</span>
+              <input value={claimInvoiceToken} onChange={(event) => onClaimInvoiceTokenChange(event.target.value)} placeholder="Untuk order guest" />
             </label>
             <label className="field">
               <span>Masalah</span>
