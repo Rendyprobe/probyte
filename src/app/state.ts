@@ -110,7 +110,7 @@ export function orderFromInvoiceResponse(response: InvoiceResponse): Order {
     variantId: "",
     variantName: order.variant_name,
     qty: order.qty,
-    customerWhatsapp: order.customer_whatsapp,
+    customerWhatsapp: order.customer_whatsapp ?? "",
     customerEmail: "",
     paymentMethod: order.payment_method,
     paymentSource: order.payment_method === "WALLET" ? "WALLET" : "GATEWAY",
@@ -123,7 +123,7 @@ export function orderFromInvoiceResponse(response: InvoiceResponse): Order {
     promoCode: null,
     accounts: response.accounts ?? [],
     createdAt: order.created_at,
-    paidAt: order.paid_at,
+    paidAt: order.paid_at ?? null,
     expiredAt: order.expired_at,
     history: order.history ?? []
   };

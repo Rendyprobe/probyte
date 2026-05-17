@@ -54,7 +54,7 @@ export type InvoiceResponse = {
     product_name: string;
     variant_name: string;
     qty: number;
-    customer_whatsapp: string;
+    customer_whatsapp?: string;
     payment_method: string;
     payment_status: Order["paymentStatus"];
     delivery_status: Order["deliveryStatus"];
@@ -63,9 +63,9 @@ export type InvoiceResponse = {
     payment_fee: number;
     total: number;
     created_at: string;
-    paid_at: string | null;
+    paid_at?: string | null;
     expired_at: string;
-    history: Order["history"];
+    history?: Order["history"];
     payment_url?: string;
   };
   accounts?: Order["accounts"];

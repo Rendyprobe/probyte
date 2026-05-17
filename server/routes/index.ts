@@ -1,5 +1,5 @@
 import { IncomingMessage, ServerResponse } from "node:http";
-import { randomBytes } from "node:crypto";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import nodemailer from "nodemailer";
 import { adminDb, getUserFromBearer } from "../repositories/supabase";
 import { assertXenditConfigured, env } from "../config/env";
@@ -22,6 +22,15 @@ type RequestContext = {
   url: URL;
   ip: string;
   params: Record<string, string>;
+};
+type AdminIdentity = { id: string; username: string };
+type NormalizedXenditInvoice = {
+  externalId: string;
+  xenditInvoiceId: string;
+  status: string;
+  paymentId: string | null;
+  amount: number | null;
+  paidAmount: number | null;
 };
 
 export async function route(req: IncomingMessage, res: ServerResponse) {
@@ -119,13 +128,14 @@ async function products(_req: IncomingMessage, res: ServerResponse) {
 async function checkout(req: IncomingMessage, res: ServerResponse, ctx: RequestContext) {
   enforceRateLimit(ctx.ip, "checkout", 20, 60_000);
   const body = await readJson(req);
-  const qty = Math.max(Number(body.qty) || 1, 1);
+  const qty = Math.max(Math.floor(Number(body.qty) || 1), 1);
   const variantId = stringBody(body.variantId);
   const whatsapp = stringBody(body.whatsapp);
   const customerEmail = stringBody(body.email);
   const promoCode = stringBody(body.promoCode).toUpperCase() || null;
   const paymentMethod = stringBody(body.paymentMethod) || "XENDIT_INVOICE";
 
+  if (!["XENDIT_INVOICE", "WALLET"].includes(paymentMethod)) return sendJson(res, 400, { error: "INVALID_PAYMENT_METHOD" });
   if (!isValidPhone(whatsapp)) return sendJson(res, 400, { error: "INVALID_WHATSAPP" });
   if (customerEmail && !isValidEmail(customerEmail)) return sendJson(res, 400, { error: "INVALID_EMAIL" });
 
@@ -175,73 +185,102 @@ async function checkout(req: IncomingMessage, res: ServerResponse, ctx: RequestC
   }
 
   assertXenditConfigured();
+  let promoReserved = false;
+  let orderInserted = false;
+  let xenditInvoiceCreated = false;
 
-  const { error: insertError } = await adminDb.from("orders").insert({
-    id: orderId,
-    user_id: user?.id ?? null,
-    invoice_number: invoiceNumber,
-    invoice_token: invoiceToken,
-    product_id: pricing.product.id,
-    product_name: pricing.product.name,
-    variant_id: pricing.variant.id,
-    variant_name: pricing.variant.name,
-    qty,
-    customer_whatsapp: whatsapp,
-    customer_email: customerEmail || user?.email || "",
-    payment_method: "XENDIT_INVOICE",
-    payment_source: "GATEWAY",
-    payment_status: "WAITING_PAYMENT",
-    delivery_status: "PENDING",
-    subtotal: pricing.subtotal,
-    discount: pricing.discount,
-    payment_fee: pricing.paymentFee,
-    total: pricing.total,
-    promo_code: promoCode,
-    history,
-    expired_at: expiredAt
-  });
-  if (insertError) throw insertError;
+  try {
+    promoReserved = await reservePromoCode(promoCode);
 
-  await adminDb.from("order_items").insert({
-    id: uid("itm"),
-    order_id: orderId,
-    product_id: pricing.product.id,
-    product_variant_id: pricing.variant.id,
-    qty,
-    unit_price: pricing.variant.sell_price,
-    total_price: pricing.subtotal
-  });
-
-  const xenditInvoice = await createXenditInvoice(env.xenditSecretKey, {
-    external_id: invoiceNumber,
-    amount: pricing.total,
-    description: `ProByte ${pricing.product.name} - ${pricing.variant.name}`,
-    invoice_duration: 30 * 60,
-    currency: "IDR",
-    customer: {
-      email: customerEmail || user?.email || undefined,
-      mobile_number: whatsapp
-    },
-    success_redirect_url: `${env.publicAppUrl}/#invoice=${encodeURIComponent(invoiceNumber)}&token=${invoiceToken}`,
-    failure_redirect_url: `${env.publicAppUrl}/#invoice=${encodeURIComponent(invoiceNumber)}`,
-    metadata: {
-      order_id: orderId,
+    const { error: insertError } = await adminDb.from("orders").insert({
+      id: orderId,
+      user_id: user?.id ?? null,
+      invoice_number: invoiceNumber,
       invoice_token: invoiceToken,
-      type: "ORDER"
+      product_id: pricing.product.id,
+      product_name: pricing.product.name,
+      variant_id: pricing.variant.id,
+      variant_name: pricing.variant.name,
+      qty,
+      customer_whatsapp: whatsapp,
+      customer_email: customerEmail || user?.email || "",
+      payment_method: "XENDIT_INVOICE",
+      payment_source: "GATEWAY",
+      payment_status: "WAITING_PAYMENT",
+      delivery_status: "PENDING",
+      subtotal: pricing.subtotal,
+      discount: pricing.discount,
+      payment_fee: pricing.paymentFee,
+      total: pricing.total,
+      promo_code: promoCode,
+      promo_reserved_at: promoReserved ? new Date().toISOString() : null,
+      history,
+      expired_at: expiredAt
+    });
+    if (insertError) throw insertError;
+    orderInserted = true;
+
+    const { error: itemError } = await adminDb.from("order_items").insert({
+      id: uid("itm"),
+      order_id: orderId,
+      product_id: pricing.product.id,
+      product_variant_id: pricing.variant.id,
+      qty,
+      unit_price: pricing.variant.sell_price,
+      total_price: pricing.subtotal
+    });
+    if (itemError) throw itemError;
+
+    const xenditInvoice = await createXenditInvoice(env.xenditSecretKey, {
+      external_id: invoiceNumber,
+      amount: pricing.total,
+      description: `ProByte ${pricing.product.name} - ${pricing.variant.name}`,
+      invoice_duration: 30 * 60,
+      currency: "IDR",
+      customer: {
+        email: customerEmail || user?.email || undefined,
+        mobile_number: whatsapp
+      },
+      success_redirect_url: `${env.publicAppUrl}/#invoice=${encodeURIComponent(invoiceNumber)}&token=${invoiceToken}`,
+      failure_redirect_url: `${env.publicAppUrl}/#invoice=${encodeURIComponent(invoiceNumber)}`,
+      metadata: {
+        order_id: orderId,
+        invoice_token: invoiceToken,
+        type: "ORDER"
+      }
+    });
+    xenditInvoiceCreated = true;
+
+    const { error: updateError } = await adminDb
+      .from("orders")
+      .update({ xendit_invoice_id: xenditInvoice.id, xendit_invoice_url: xenditInvoice.invoice_url })
+      .eq("id", orderId);
+    if (updateError) throw updateError;
+
+    sendJson(res, 201, {
+      invoice_number: invoiceNumber,
+      invoice_token: invoiceToken,
+      payment_url: xenditInvoice.invoice_url,
+      total: pricing.total
+    });
+  } catch (error) {
+    if (!xenditInvoiceCreated) {
+      if (promoReserved) await releasePromoCode(promoCode);
+      if (orderInserted) {
+        await adminDb
+          .from("orders")
+          .update({
+            payment_status: "FAILED",
+            delivery_status: "PENDING",
+            promo_reserved_at: null,
+            updated_at: new Date().toISOString(),
+            history: [...history, { at: new Date().toISOString(), text: "Invoice gagal dibuat" }]
+          })
+          .eq("id", orderId);
+      }
     }
-  });
-
-  await adminDb
-    .from("orders")
-    .update({ xendit_invoice_id: xenditInvoice.id, xendit_invoice_url: xenditInvoice.invoice_url })
-    .eq("id", orderId);
-
-  sendJson(res, 201, {
-    invoice_number: invoiceNumber,
-    invoice_token: invoiceToken,
-    payment_url: xenditInvoice.invoice_url,
-    total: pricing.total
-  });
+    throw error;
+  }
 }
 
 async function xenditWebhook(req: IncomingMessage, res: ServerResponse) {
@@ -252,6 +291,9 @@ async function xenditWebhook(req: IncomingMessage, res: ServerResponse) {
 
   const payload = (await readJson(req)) as XenditInvoiceWebhook & { data?: any; event?: string };
   const invoice = normalizeXenditPayload(payload);
+  if (!invoice.externalId || !invoice.xenditInvoiceId) {
+    return sendJson(res, 400, { error: "INVALID_WEBHOOK_PAYLOAD" });
+  }
   const webhookId = req.headers["webhook-id"]?.toString() || `invoice-${invoice.xenditInvoiceId}-${invoice.status}-${invoice.paymentId ?? "none"}`;
 
   const { error: webhookError } = await adminDb.from("webhook_events").insert({
@@ -272,25 +314,23 @@ async function xenditWebhook(req: IncomingMessage, res: ServerResponse) {
   try {
     if (isPaidXenditInvoiceStatus({ status: invoice.status } as XenditInvoiceWebhook)) {
       if (invoice.externalId.startsWith("TOPUP-")) {
+        await assertTopupWebhookMatches(invoice);
         await adminDb.rpc("settle_wallet_topup", {
           p_xendit_invoice_id: invoice.xenditInvoiceId,
           p_payment_reference: invoice.paymentId
         });
       } else {
+        const order = await assertGatewayWebhookMatches(invoice);
         const { data, error } = await adminDb.rpc("mark_gateway_order_paid_and_deliver", {
-          p_invoice_number: invoice.externalId,
+          p_invoice_number: order.invoice_number,
           p_xendit_invoice_id: invoice.xenditInvoiceId,
           p_xendit_payment_id: invoice.paymentId
         });
         if (error) throw error;
-        console.log("Delivered accounts", decryptDeliveredRows(data ?? []).map((item) => item.email));
+        console.log("Delivered account count", Array.isArray(data) ? data.length : 0);
       }
     } else if (invoice.status === "EXPIRED" || invoice.status === "FAILED") {
-      await adminDb
-        .from("orders")
-        .update({ payment_status: invoice.status, delivery_status: "PENDING" })
-        .or(`invoice_number.eq.${invoice.externalId},xendit_invoice_id.eq.${invoice.xenditInvoiceId}`);
-      await adminDb.from("wallet_ledger").update({ status: "FAILED" }).eq("xendit_invoice_id", invoice.xenditInvoiceId).eq("status", "PENDING");
+      await markInvoiceExpiredOrFailed(invoice);
     }
 
     await adminDb.from("webhook_events").update({ status: "PROCESSED", processed_at: new Date().toISOString() }).eq("provider", "XENDIT").eq("webhook_id", webhookId);
@@ -376,6 +416,7 @@ async function createWarrantyClaim(req: IncomingMessage, res: ServerResponse, ct
   if (!user) return;
   const body = await readJson(req);
   const invoiceNumber = stringBody(body.invoiceNumber);
+  const invoiceToken = stringBody(body.invoiceToken);
   const issueSummary = stringBody(body.issueSummary);
   if (issueSummary.length < 8) return sendJson(res, 400, { error: "ISSUE_TOO_SHORT" });
 
@@ -383,6 +424,9 @@ async function createWarrantyClaim(req: IncomingMessage, res: ServerResponse, ct
   if (error) throw error;
   if (!order || order.payment_status !== "PAID") return sendJson(res, 400, { error: "INVALID_INVOICE" });
   if (order.user_id && order.user_id !== user.id) return sendJson(res, 403, { error: "FORBIDDEN" });
+  if (!order.user_id && (!invoiceToken || !safeStringEqual(invoiceToken, order.invoice_token))) {
+    return sendJson(res, 403, { error: "INVALID_INVOICE_TOKEN" });
+  }
 
   const claim = {
     id: uid("wrn"),
@@ -552,6 +596,84 @@ async function adminSendRestockAlerts(req: IncomingMessage, res: ServerResponse)
   sendJson(res, 200, { sent, alerts });
 }
 
+async function reservePromoCode(code: string | null) {
+  if (!code) return false;
+  const { data, error } = await adminDb.rpc("reserve_promo_code", { p_code: code });
+  if (error) throw error;
+  if (data !== true) throw httpError(400, "INVALID_PROMO");
+  return true;
+}
+
+async function releasePromoCode(code: string | null) {
+  if (!code) return;
+  const { error } = await adminDb.rpc("release_promo_code", { p_code: code });
+  if (error) console.error("Failed to release promo reservation", error);
+}
+
+async function assertGatewayWebhookMatches(invoice: NormalizedXenditInvoice) {
+  const { data: order, error } = await adminDb
+    .from("orders")
+    .select("id,invoice_number,xendit_invoice_id,total")
+    .eq("invoice_number", invoice.externalId)
+    .maybeSingle();
+  if (error) throw error;
+  if (!order) throw httpError(400, "WEBHOOK_ORDER_NOT_FOUND");
+  if (order.xendit_invoice_id !== invoice.xenditInvoiceId) throw httpError(400, "WEBHOOK_INVOICE_MISMATCH");
+  assertWebhookAmount(Number(order.total), invoice);
+  return order as { id: string; invoice_number: string; xendit_invoice_id: string; total: number };
+}
+
+async function assertTopupWebhookMatches(invoice: NormalizedXenditInvoice) {
+  const { data: ledger, error } = await adminDb
+    .from("wallet_ledger")
+    .select("id,kind,amount,status,payment_reference,xendit_invoice_id")
+    .eq("xendit_invoice_id", invoice.xenditInvoiceId)
+    .eq("kind", "TOPUP")
+    .maybeSingle();
+  if (error) throw error;
+  if (!ledger) throw httpError(400, "WEBHOOK_TOPUP_NOT_FOUND");
+  if (ledger.status === "PENDING" && ledger.payment_reference !== invoice.externalId) throw httpError(400, "WEBHOOK_INVOICE_MISMATCH");
+  assertWebhookAmount(Number(ledger.amount), invoice);
+}
+
+async function markInvoiceExpiredOrFailed(invoice: NormalizedXenditInvoice) {
+  if (invoice.externalId.startsWith("TOPUP-")) {
+    await adminDb
+      .from("wallet_ledger")
+      .update({ status: "FAILED" })
+      .eq("xendit_invoice_id", invoice.xenditInvoiceId)
+      .eq("payment_reference", invoice.externalId)
+      .eq("status", "PENDING");
+    return;
+  }
+
+  const { data: order, error } = await adminDb
+    .from("orders")
+    .select("id,payment_status,promo_code,promo_reserved_at")
+    .eq("invoice_number", invoice.externalId)
+    .eq("xendit_invoice_id", invoice.xenditInvoiceId)
+    .maybeSingle();
+  if (error) throw error;
+  if (!order) throw httpError(400, "WEBHOOK_ORDER_NOT_FOUND");
+
+  if (order.payment_status === "WAITING_PAYMENT" && order.promo_reserved_at) {
+    await releasePromoCode(order.promo_code);
+  }
+
+  await adminDb
+    .from("orders")
+    .update({ payment_status: invoice.status, delivery_status: "PENDING", promo_reserved_at: null, updated_at: new Date().toISOString() })
+    .eq("id", order.id)
+    .eq("payment_status", "WAITING_PAYMENT");
+}
+
+function assertWebhookAmount(expectedAmount: number, invoice: NormalizedXenditInvoice) {
+  const receivedAmount = invoice.paidAmount ?? invoice.amount;
+  if (receivedAmount === null || receivedAmount !== expectedAmount) {
+    throw httpError(400, "WEBHOOK_AMOUNT_MISMATCH");
+  }
+}
+
 async function calculateCheckout(variantId: string, qty: number, promoCode: string | null, paymentMethod: string) {
   const { data: variant, error } = await adminDb
     .from("product_variants")
@@ -619,12 +741,19 @@ async function requireUser(req: IncomingMessage, res: ServerResponse) {
 
 async function requireAdmin(req: IncomingMessage, res: ServerResponse) {
   const token = req.headers.authorization?.startsWith("Bearer ") ? req.headers.authorization.slice("Bearer ".length) : "";
-  const admin = verifyAdminToken(token);
+  const tokenAdmin = verifyAdminToken(token);
+  if (!tokenAdmin) {
+    sendJson(res, 401, { error: "ADMIN_AUTH_REQUIRED" });
+    return null;
+  }
+
+  const { data: admin, error } = await adminDb.from("admin_users").select("id,username").eq("id", tokenAdmin.id).eq("is_active", true).maybeSingle();
+  if (error) throw error;
   if (!admin) {
     sendJson(res, 401, { error: "ADMIN_AUTH_REQUIRED" });
     return null;
   }
-  return admin;
+  return admin as AdminIdentity;
 }
 
 async function audit(adminId: string, action: string, entityType: string, entityId: string, metadata: Json) {
@@ -698,16 +827,22 @@ function publicOrder(order: any, authorized: boolean) {
     expired_at: order.expired_at,
     history: order.history
   };
-  return authorized ? { ...safe, invoice_token: order.invoice_token, payment_url: order.xendit_invoice_url } : safe;
+  if (!authorized) {
+    const { customer_whatsapp: _customerWhatsapp, history: _history, ...publicSafe } = safe;
+    return publicSafe;
+  }
+  return { ...safe, invoice_token: order.invoice_token, payment_url: order.xendit_invoice_url };
 }
 
-function normalizeXenditPayload(payload: XenditInvoiceWebhook & { data?: any }) {
+function normalizeXenditPayload(payload: XenditInvoiceWebhook & { data?: any }): NormalizedXenditInvoice {
   const data = payload.data ?? payload;
   return {
     externalId: String(data.external_id ?? data.reference_id ?? payload.external_id ?? ""),
     xenditInvoiceId: String(data.id ?? payload.id ?? ""),
     status: String(data.status ?? payload.status ?? ""),
-    paymentId: data.payment_id ?? data.payment_request_id ?? data.payment_method ?? null
+    paymentId: nullableString(data.payment_id ?? data.payment_request_id ?? data.payment_method),
+    amount: numberOrNull(data.amount ?? payload.amount),
+    paidAmount: numberOrNull(data.paid_amount ?? payload.paid_amount)
   };
 }
 
@@ -749,6 +884,7 @@ function variantPayload(body: any, partial = false) {
 function sendRpcError(res: ServerResponse, message: string) {
   if (message.includes("INSUFFICIENT_BALANCE")) return sendJson(res, 409, { error: "INSUFFICIENT_BALANCE" });
   if (message.includes("INSUFFICIENT_STOCK")) return sendJson(res, 409, { error: "INSUFFICIENT_STOCK" });
+  if (message.includes("INVALID_PROMO")) return sendJson(res, 400, { error: "INVALID_PROMO" });
   if (message.includes("AUTH_REQUIRED")) return sendJson(res, 401, { error: "AUTH_REQUIRED" });
   return sendJson(res, 400, { error: "REQUEST_FAILED" });
 }
@@ -761,9 +897,19 @@ function httpError(status: number, message: string) {
 
 async function readJson(req: IncomingMessage) {
   const chunks: Buffer[] = [];
-  for await (const chunk of req) chunks.push(Buffer.from(chunk));
+  let totalBytes = 0;
+  for await (const chunk of req) {
+    const buffer = Buffer.from(chunk);
+    totalBytes += buffer.length;
+    if (totalBytes > 1024 * 1024) throw httpError(413, "PAYLOAD_TOO_LARGE");
+    chunks.push(buffer);
+  }
   if (!chunks.length) return {};
-  return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  } catch {
+    throw httpError(400, "INVALID_JSON");
+  }
 }
 
 function sendJson(res: ServerResponse, status: number, payload: Json) {
@@ -772,8 +918,12 @@ function sendJson(res: ServerResponse, status: number, payload: Json) {
 }
 
 function getIp(req: IncomingMessage) {
+  const remoteAddress = normalizeIp(req.socket.remoteAddress);
+  if (!env.trustProxy) return remoteAddress;
+
   const forwarded = req.headers["x-forwarded-for"]?.toString().split(",")[0]?.trim();
-  return forwarded || req.socket.remoteAddress || "unknown";
+  const cloudflare = req.headers["cf-connecting-ip"]?.toString().trim();
+  return normalizeIp(forwarded || cloudflare || remoteAddress);
 }
 
 function headerMap(req: IncomingMessage) {
@@ -782,6 +932,27 @@ function headerMap(req: IncomingMessage) {
 
 function stringBody(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function numberOrNull(value: unknown) {
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) ? numberValue : null;
+}
+
+function nullableString(value: unknown) {
+  if (typeof value === "string") return value.trim() || null;
+  if (typeof value === "number") return String(value);
+  return null;
+}
+
+function safeStringEqual(left: string, right: string) {
+  const leftBuffer = Buffer.from(left);
+  const rightBuffer = Buffer.from(right);
+  return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer);
+}
+
+function normalizeIp(value: string | undefined) {
+  return value?.replace(/^::ffff:/, "") || "unknown";
 }
 
 function createInvoiceNumber() {
