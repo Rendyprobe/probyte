@@ -1,9 +1,14 @@
 import { getProduct, products } from "@/lib/catalog";
-import type { AccountStock, AuditLog, DemoState, Order, PromoCode, WalletLedgerEntry, WarrantyClaim } from "@/lib/types";
-import { promoCodes, STORAGE_KEY } from "./constants";
-import type { InvoiceResponse, OrderRow, WarrantyClaimRow } from "./types";
+import type { AccountStock, AuditLog, DemoState, Order, ProductReview, PromoCode, PublicReview, WalletLedgerEntry, WarrantyClaim } from "@/lib/types";
+import { DEMO_MODE, promoCodes, STORAGE_KEY } from "./constants";
+import type { InvoiceResponse, OrderRow, ProductReviewRow, WalletLedgerRow, WarrantyClaimRow } from "./types";
 
-export function loadState() {
+export function loadState(demoMode = DEMO_MODE) {
+  if (!demoMode) {
+    localStorage.removeItem(STORAGE_KEY);
+    return createRuntimeState();
+  }
+
   const saved = localStorage.getItem(STORAGE_KEY);
   if (saved) {
     try {
@@ -17,6 +22,17 @@ export function loadState() {
   const seeded = createSeedState();
   localStorage.setItem(STORAGE_KEY, JSON.stringify(seeded));
   return seeded;
+}
+
+export function createRuntimeState(): DemoState {
+  return {
+    stocks: [],
+    orders: [],
+    audits: [],
+    walletLedger: [],
+    warrantyClaims: [],
+    createdAt: new Date().toISOString()
+  };
 }
 
 export function createSeedState(): DemoState {
@@ -140,6 +156,52 @@ export function warrantyClaimFromRow(row: WarrantyClaimRow): WarrantyClaim {
     refundWalletLedgerId: row.refund_wallet_ledger_id,
     createdAt: row.created_at,
     resolvedAt: row.resolved_at
+  };
+}
+
+export function walletLedgerFromRow(row: WalletLedgerRow): WalletLedgerEntry {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    kind: row.kind,
+    amount: Number(row.amount),
+    status: row.status,
+    invoiceNumber: row.invoice_number,
+    paymentReference: row.payment_reference,
+    note: row.note ?? "",
+    createdAt: row.created_at,
+    settledAt: row.settled_at
+  };
+}
+
+export function reviewFromRow(row: ProductReviewRow): ProductReview {
+  return {
+    id: row.id,
+    orderId: row.order_id ?? "",
+    userId: row.user_id ?? "",
+    invoiceNumber: row.invoice_number ?? "",
+    productId: row.product_id,
+    productName: row.product_name,
+    variantName: row.variant_name,
+    rating: Number(row.rating),
+    comment: row.comment,
+    displayName: row.display_name,
+    isPublic: row.is_public ?? true,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at ?? row.created_at
+  };
+}
+
+export function publicReviewFromRow(row: ProductReviewRow): PublicReview {
+  return {
+    id: row.id,
+    productId: row.product_id,
+    productName: row.product_name,
+    variantName: row.variant_name,
+    rating: Number(row.rating),
+    comment: row.comment,
+    displayName: row.display_name,
+    createdAt: row.created_at
   };
 }
 
@@ -279,6 +341,10 @@ export function isValidEmail(email: string) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
 
+export function canReviewOrder(order: Order) {
+  return order.paymentStatus === "PAID" && order.deliveryStatus === "DELIVERED";
+}
+
 export function paymentLabel(method: string) {
   const labels: Record<string, string> = {
     XENDIT_INVOICE: "Xendit Payment Link",
@@ -287,10 +353,10 @@ export function paymentLabel(method: string) {
   return labels[method] ?? "Xendit";
 }
 
-export function findPromo(code: string, subtotal: number) {
+export function findPromo(code: string, subtotal: number, catalog: PromoCode[] = promoCodes) {
   const normalized = code.trim().toUpperCase();
   if (!normalized) return null;
-  return promoCodes.find((promo) => promo.active && promo.code === normalized && subtotal >= promo.minSubtotal) ?? null;
+  return catalog.find((promo) => promo.active && promo.code === normalized && subtotal >= promo.minSubtotal) ?? null;
 }
 
 export function calculatePromoDiscount(promo: PromoCode, subtotal: number) {

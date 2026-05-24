@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { calculatePromoDiscount, calculateWalletBalance, findPromo, isValidEmail, isValidPhone, paymentLabel } from "../src/app/state";
-import type { PromoCode, WalletLedgerEntry } from "../src/lib/types";
+import { calculatePromoDiscount, calculateWalletBalance, canReviewOrder, findPromo, isValidEmail, isValidPhone, paymentLabel } from "../src/app/state";
+import type { Order, PromoCode, WalletLedgerEntry } from "../src/lib/types";
 
 describe("app state helpers", () => {
   it("validates Indonesian WhatsApp numbers and email addresses", () => {
@@ -39,6 +39,13 @@ describe("app state helpers", () => {
     assert.equal(calculateWalletBalance(ledger, "user_1"), 33000);
     assert.equal(paymentLabel("WALLET"), "Saldo Akun");
   });
+
+  it("allows reviews only after paid orders are delivered", () => {
+    const order = orderFixture();
+    assert.equal(canReviewOrder(order), true);
+    assert.equal(canReviewOrder({ ...order, paymentStatus: "WAITING_PAYMENT" }), false);
+    assert.equal(canReviewOrder({ ...order, deliveryStatus: "PENDING" }), false);
+  });
 });
 
 function wallet(kind: WalletLedgerEntry["kind"], amount: number, status: WalletLedgerEntry["status"]): WalletLedgerEntry {
@@ -53,5 +60,34 @@ function wallet(kind: WalletLedgerEntry["kind"], amount: number, status: WalletL
     note: "",
     createdAt: new Date(0).toISOString(),
     settledAt: status === "SETTLED" ? new Date(0).toISOString() : null
+  };
+}
+
+function orderFixture(): Order {
+  return {
+    id: "order_1",
+    userId: "user_1",
+    invoiceNumber: "PBY-20260515-ABCD",
+    productId: "netflix",
+    productName: "Netflix",
+    variantId: "netflix-30d",
+    variantName: "Private 1 Bulan",
+    qty: 1,
+    customerWhatsapp: "081234567890",
+    customerEmail: "buyer@example.com",
+    paymentMethod: "WALLET",
+    paymentSource: "WALLET",
+    paymentStatus: "PAID",
+    deliveryStatus: "DELIVERED",
+    subtotal: 68000,
+    discount: 0,
+    paymentFee: 0,
+    total: 68000,
+    promoCode: null,
+    accounts: [],
+    createdAt: new Date(0).toISOString(),
+    paidAt: new Date(0).toISOString(),
+    expiredAt: new Date(0).toISOString(),
+    history: []
   };
 }

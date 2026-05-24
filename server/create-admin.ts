@@ -9,12 +9,16 @@ if (!username || !password) {
   process.exit(1);
 }
 
-const password_hash = await hashPassword(password);
-const { error } = await adminDb.from("admin_users").upsert({ username, password_hash, is_active: true }, { onConflict: "username" });
+void main();
 
-if (error) {
-  console.error(error.message);
-  process.exit(1);
+async function main() {
+  const password_hash = await hashPassword(password);
+  const { error } = await adminDb.from("admin_users").upsert({ username, password_hash, is_active: true }, { onConflict: "username" });
+
+  if (error) {
+    console.error(error.message);
+    process.exit(1);
+  }
+
+  console.log(`Admin user '${username}' is ready.`);
 }
-
-console.log(`Admin user '${username}' is ready.`);

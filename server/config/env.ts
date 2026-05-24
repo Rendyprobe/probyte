@@ -26,7 +26,7 @@ export const env: ServerEnv = {
   apiPort: numberEnv("API_PORT", 8787),
   corsOrigin: stringEnv("CORS_ORIGIN", "http://localhost:5173"),
   trustProxy: booleanEnv("TRUST_PROXY", false),
-  publicAppUrl: stringEnv("PUBLIC_APP_URL", "http://localhost:5173"),
+  publicAppUrl: firstStringEnv(["PUBLIC_APP_URL", "VITE_APP_PUBLIC_URL"], "http://localhost:5173"),
   supabaseUrl: firstStringEnv(["VITE_SUPABASE_URL", "NEXT_PUBLIC_SUPABASE_URL"], ""),
   supabaseServiceRoleKey: stringEnv("SUPABASE_SERVICE_ROLE_KEY", ""),
   xenditSecretKey: stringEnv("XENDIT_SECRET_KEY", ""),

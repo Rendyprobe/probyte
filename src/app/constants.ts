@@ -3,6 +3,8 @@ import type { DemoState, PromoCode } from "@/lib/types";
 export const STORAGE_KEY = "probyte_vite_demo_state_v1";
 export const ADMIN_SESSION_KEY = "probyte_admin_session_v1";
 export const MIN_TOP_UP = 10000;
+export const DEMO_MODE =
+  String((import.meta as ImportMeta & { env?: Record<string, unknown> }).env?.VITE_DEMO_MODE ?? "").toLowerCase() === "true";
 
 export const emptyState: DemoState = {
   stocks: [],

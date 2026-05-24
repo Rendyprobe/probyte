@@ -56,16 +56,31 @@ export async function route(req: IncomingMessage, res: ServerResponse) {
     ["POST", /^\/api\/wallet\/topup$/, walletTopup],
     ["GET", /^\/api\/wallet\/ledger$/, walletLedger],
     ["GET", /^\/api\/invoices\/([^/]+)$/, invoice],
+    ["POST", /^\/api\/invoices\/([^/]+)\/receipt$/, sendInvoiceReceipt],
+    ["GET", /^\/api\/reviews$/, publicReviews],
+    ["POST", /^\/api\/reviews$/, createReview],
+    ["GET", /^\/api\/account\/reviews$/, accountReviews],
     ["POST", /^\/api\/warranty-claims$/, createWarrantyClaim],
     ["POST", /^\/api\/admin\/login$/, adminLogin],
+    ["GET", /^\/api\/admin\/products$/, adminProducts],
     ["GET", /^\/api\/admin\/orders$/, adminOrders],
     ["GET", /^\/api\/admin\/warranty-claims$/, adminWarrantyClaims],
     ["GET", /^\/api\/admin\/analytics$/, adminAnalytics],
+    ["GET", /^\/api\/admin\/wallet-summary$/, adminWalletSummary],
+    ["GET", /^\/api\/admin\/wallet-ledger$/, adminWalletLedger],
+    ["POST", /^\/api\/admin\/wallet-adjustments$/, adminWalletAdjustment],
+    ["GET", /^\/api\/admin\/promos$/, adminPromos],
+    ["POST", /^\/api\/admin\/promos$/, adminCreatePromo],
+    ["PATCH", /^\/api\/admin\/promos\/([^/]+)$/, adminUpdatePromo],
+    ["GET", /^\/api\/admin\/audit-logs$/, adminAuditLogs],
     ["POST", /^\/api\/admin\/stocks$/, adminStocks],
     ["POST", /^\/api\/admin\/products$/, adminCreateProduct],
     ["PATCH", /^\/api\/admin\/products\/([^/]+)$/, adminUpdateProduct],
     ["POST", /^\/api\/admin\/variants$/, adminCreateVariant],
     ["PATCH", /^\/api\/admin\/variants\/([^/]+)$/, adminUpdateVariant],
+    ["POST", /^\/api\/admin\/orders\/([^/]+)\/replace-account$/, adminReplaceOrderAccounts],
+    ["POST", /^\/api\/admin\/warranty-claims\/([^/]+)\/review$/, adminReviewWarranty],
+    ["POST", /^\/api\/admin\/warranty-claims\/([^/]+)\/reject$/, adminRejectWarranty],
     ["POST", /^\/api\/admin\/warranty-claims\/([^/]+)\/refund$/, adminRefundWarranty],
     ["POST", /^\/api\/admin\/restock-alerts\/send$/, adminSendRestockAlerts]
   ];
@@ -185,51 +200,31 @@ async function checkout(req: IncomingMessage, res: ServerResponse, ctx: RequestC
   }
 
   assertXenditConfigured();
-  let promoReserved = false;
-  let orderInserted = false;
-  let xenditInvoiceCreated = false;
+  let orderReserved = false;
 
   try {
-    promoReserved = await reservePromoCode(promoCode);
-
-    const { error: insertError } = await adminDb.from("orders").insert({
-      id: orderId,
-      user_id: user?.id ?? null,
-      invoice_number: invoiceNumber,
-      invoice_token: invoiceToken,
-      product_id: pricing.product.id,
-      product_name: pricing.product.name,
-      variant_id: pricing.variant.id,
-      variant_name: pricing.variant.name,
-      qty,
-      customer_whatsapp: whatsapp,
-      customer_email: customerEmail || user?.email || "",
-      payment_method: "XENDIT_INVOICE",
-      payment_source: "GATEWAY",
-      payment_status: "WAITING_PAYMENT",
-      delivery_status: "PENDING",
-      subtotal: pricing.subtotal,
-      discount: pricing.discount,
-      payment_fee: pricing.paymentFee,
-      total: pricing.total,
-      promo_code: promoCode,
-      promo_reserved_at: promoReserved ? new Date().toISOString() : null,
-      history,
-      expired_at: expiredAt
+    const { error: reserveError } = await adminDb.rpc("create_gateway_order_with_reservation", {
+      p_order_id: orderId,
+      p_invoice_number: invoiceNumber,
+      p_invoice_token: invoiceToken,
+      p_user_id: user?.id ?? null,
+      p_product_id: pricing.product.id,
+      p_product_name: pricing.product.name,
+      p_variant_id: pricing.variant.id,
+      p_variant_name: pricing.variant.name,
+      p_qty: qty,
+      p_customer_whatsapp: whatsapp,
+      p_customer_email: customerEmail || user?.email || "",
+      p_subtotal: pricing.subtotal,
+      p_discount: pricing.discount,
+      p_payment_fee: pricing.paymentFee,
+      p_total: pricing.total,
+      p_promo_code: promoCode,
+      p_history: history,
+      p_expired_at: expiredAt
     });
-    if (insertError) throw insertError;
-    orderInserted = true;
-
-    const { error: itemError } = await adminDb.from("order_items").insert({
-      id: uid("itm"),
-      order_id: orderId,
-      product_id: pricing.product.id,
-      product_variant_id: pricing.variant.id,
-      qty,
-      unit_price: pricing.variant.sell_price,
-      total_price: pricing.subtotal
-    });
-    if (itemError) throw itemError;
+    if (reserveError) return sendRpcError(res, reserveError.message);
+    orderReserved = true;
 
     const xenditInvoice = await createXenditInvoice(env.xenditSecretKey, {
       external_id: invoiceNumber,
@@ -249,8 +244,6 @@ async function checkout(req: IncomingMessage, res: ServerResponse, ctx: RequestC
         type: "ORDER"
       }
     });
-    xenditInvoiceCreated = true;
-
     const { error: updateError } = await adminDb
       .from("orders")
       .update({ xendit_invoice_id: xenditInvoice.id, xendit_invoice_url: xenditInvoice.invoice_url })
@@ -264,20 +257,13 @@ async function checkout(req: IncomingMessage, res: ServerResponse, ctx: RequestC
       total: pricing.total
     });
   } catch (error) {
-    if (!xenditInvoiceCreated) {
-      if (promoReserved) await releasePromoCode(promoCode);
-      if (orderInserted) {
-        await adminDb
-          .from("orders")
-          .update({
-            payment_status: "FAILED",
-            delivery_status: "PENDING",
-            promo_reserved_at: null,
-            updated_at: new Date().toISOString(),
-            history: [...history, { at: new Date().toISOString(), text: "Invoice gagal dibuat" }]
-          })
-          .eq("id", orderId);
-      }
+    if (orderReserved) {
+      const { error: releaseError } = await adminDb.rpc("release_gateway_order_reservation", {
+        p_order_id: orderId,
+        p_payment_status: "FAILED",
+        p_history_text: "Invoice gagal dibuat"
+      });
+      if (releaseError) console.error("Failed to release gateway reservation", releaseError);
     }
     throw error;
   }
@@ -307,9 +293,32 @@ async function xenditWebhook(req: IncomingMessage, res: ServerResponse) {
   });
 
   if (webhookError?.code === "23505") {
-    return sendJson(res, 200, { ok: true, duplicate: true });
+    const { data: existing, error: existingError } = await adminDb
+      .from("webhook_events")
+      .select("status")
+      .eq("provider", "XENDIT")
+      .eq("webhook_id", webhookId)
+      .maybeSingle();
+    if (existingError) throw existingError;
+    if (existing?.status !== "FAILED") {
+      return sendJson(res, 200, { ok: true, duplicate: true, status: existing?.status ?? "UNKNOWN" });
+    }
+
+    const { error: retryError } = await adminDb
+      .from("webhook_events")
+      .update({
+        external_id: invoice.externalId,
+        event_type: payload.event ?? "invoice",
+        status: "RECEIVED",
+        payload_json: payload as Json,
+        processed_at: null
+      })
+      .eq("provider", "XENDIT")
+      .eq("webhook_id", webhookId)
+      .eq("status", "FAILED");
+    if (retryError) throw retryError;
   }
-  if (webhookError) throw webhookError;
+  if (webhookError && webhookError.code !== "23505") throw webhookError;
 
   try {
     if (isPaidXenditInvoiceStatus({ status: invoice.status } as XenditInvoiceWebhook)) {
@@ -353,31 +362,47 @@ async function walletTopup(req: IncomingMessage, res: ServerResponse, ctx: Reque
 
   const ledgerId = uid("wlt");
   const externalId = `TOPUP-${ledgerId}`;
-  const { error } = await adminDb.from("wallet_ledger").insert({
-    id: ledgerId,
-    user_id: user.id,
-    kind: "TOPUP",
-    amount,
-    status: "PENDING",
-    payment_reference: externalId,
-    note: "Top up saldo via Xendit"
-  });
-  if (error) throw error;
+  let ledgerInserted = false;
 
-  const invoice = await createXenditInvoice(env.xenditSecretKey, {
-    external_id: externalId,
-    amount,
-    description: "Top up saldo ProByte",
-    invoice_duration: 30 * 60,
-    currency: "IDR",
-    customer: { email: user.email ?? undefined },
-    success_redirect_url: `${env.publicAppUrl}/#account`,
-    failure_redirect_url: `${env.publicAppUrl}/#account`,
-    metadata: { type: "TOPUP", ledger_id: ledgerId }
-  });
+  try {
+    const { error } = await adminDb.from("wallet_ledger").insert({
+      id: ledgerId,
+      user_id: user.id,
+      kind: "TOPUP",
+      amount,
+      status: "PENDING",
+      payment_reference: externalId,
+      note: "Top up saldo via Xendit"
+    });
+    if (error) throw error;
+    ledgerInserted = true;
 
-  await adminDb.from("wallet_ledger").update({ xendit_invoice_id: invoice.id }).eq("id", ledgerId);
-  sendJson(res, 201, { id: ledgerId, payment_url: invoice.invoice_url, amount });
+    const invoice = await createXenditInvoice(env.xenditSecretKey, {
+      external_id: externalId,
+      amount,
+      description: "Top up saldo ProByte",
+      invoice_duration: 30 * 60,
+      currency: "IDR",
+      customer: { email: user.email ?? undefined },
+      success_redirect_url: `${env.publicAppUrl}/#account`,
+      failure_redirect_url: `${env.publicAppUrl}/#account`,
+      metadata: { type: "TOPUP", ledger_id: ledgerId }
+    });
+
+    const { error: updateError } = await adminDb.from("wallet_ledger").update({ xendit_invoice_id: invoice.id }).eq("id", ledgerId);
+    if (updateError) throw updateError;
+
+    sendJson(res, 201, { id: ledgerId, payment_url: invoice.invoice_url, amount });
+  } catch (error) {
+    if (ledgerInserted) {
+      await adminDb
+        .from("wallet_ledger")
+        .update({ status: "FAILED", note: "Top up gagal dibuat. Silakan ulangi." })
+        .eq("id", ledgerId)
+        .eq("status", "PENDING");
+    }
+    throw error;
+  }
 }
 
 async function walletLedger(req: IncomingMessage, res: ServerResponse) {
@@ -408,6 +433,146 @@ async function invoice(req: IncomingMessage, res: ServerResponse, ctx: RequestCo
   }
 
   sendJson(res, 200, response);
+}
+
+async function sendInvoiceReceipt(req: IncomingMessage, res: ServerResponse, ctx: RequestContext) {
+  enforceRateLimit(ctx.ip, "invoice_receipt", 10, 60_000);
+  const invoiceNumber = ctx.params[0];
+  const body = await readJson(req);
+  const token = stringBody(body.invoiceToken);
+  const user = await getUserFromBearer(req.headers.authorization);
+
+  const { data: order, error } = await adminDb.from("orders").select("*").eq("invoice_number", invoiceNumber).maybeSingle();
+  if (error) throw error;
+  if (!order) return sendJson(res, 404, { error: "INVOICE_NOT_FOUND" });
+
+  const authorized = Boolean((user && order.user_id === user.id) || (token && safeStringEqual(token, order.invoice_token)));
+  if (!authorized) return sendJson(res, 403, { error: "FORBIDDEN" });
+  if (!order.customer_email) return sendJson(res, 400, { error: "CUSTOMER_EMAIL_REQUIRED" });
+
+  let accountRows: any[] = [];
+  if (order.payment_status === "PAID" && order.delivery_status === "DELIVERED") {
+    const { data, error: accountsError } = await adminDb.from("delivered_accounts").select("*").eq("order_id", order.id);
+    if (accountsError) throw accountsError;
+    accountRows = data ?? [];
+  }
+
+  const accounts = decryptDeliveredRows(accountRows);
+  const invoiceUrl = `${env.publicAppUrl}/#invoice=${encodeURIComponent(order.invoice_number)}&token=${order.invoice_token}`;
+  const accountHtml = accounts.length
+    ? `<h3>Detail akun</h3><ul>${accounts
+        .map((account) => `<li><strong>${escapeHtml(account.email)}</strong><br/>Password: ${escapeHtml(account.password)}</li>`)
+        .join("")}</ul>`
+    : "<p>Detail akun akan muncul setelah pembayaran berhasil dan delivery selesai.</p>";
+
+  const sent = await sendEmailTo(
+    order.customer_email,
+    `Invoice ProByte ${order.invoice_number}`,
+    `<p>Halo, berikut ringkasan transaksi ProByte.</p>
+    <ul>
+      <li>Invoice: <strong>${escapeHtml(order.invoice_number)}</strong></li>
+      <li>Produk: ${escapeHtml(order.product_name)} - ${escapeHtml(order.variant_name)}</li>
+      <li>Status pembayaran: ${escapeHtml(order.payment_status)}</li>
+      <li>Status pengiriman: ${escapeHtml(order.delivery_status)}</li>
+      <li>Total: Rp ${Number(order.total).toLocaleString("id-ID")}</li>
+    </ul>
+    <p>Link invoice: <a href="${escapeHtml(invoiceUrl)}">${escapeHtml(invoiceUrl)}</a></p>
+    ${accountHtml}
+    <p>Simpan email ini untuk cek invoice dan klaim garansi.</p>`
+  );
+
+  if (!sent) return sendJson(res, 503, { error: "EMAIL_CONFIGURATION_REQUIRED" });
+  sendJson(res, 200, { sent: true });
+}
+
+async function publicReviews(_req: IncomingMessage, res: ServerResponse, ctx: RequestContext) {
+  const limit = Math.min(Math.max(Math.floor(Number(ctx.url.searchParams.get("limit")) || 12), 1), 50);
+  const productId = ctx.url.searchParams.get("productId")?.trim();
+  let query = adminDb
+    .from("product_reviews")
+    .select("id,product_id,product_name,variant_name,rating,comment,display_name,created_at")
+    .eq("is_public", true)
+    .order("created_at", { ascending: false })
+    .limit(limit);
+
+  if (productId) query = query.eq("product_id", productId);
+
+  const { data, error } = await query;
+  if (isMissingProductReviewsTable(error)) return sendJson(res, 200, { reviews: [] });
+  if (error) throw error;
+  sendJson(res, 200, { reviews: data ?? [] });
+}
+
+async function accountReviews(req: IncomingMessage, res: ServerResponse) {
+  const user = await requireUser(req, res);
+  if (!user) return;
+
+  const { data, error } = await adminDb
+    .from("product_reviews")
+    .select("*")
+    .eq("user_id", user.id)
+    .order("created_at", { ascending: false });
+  if (isMissingProductReviewsTable(error)) return sendJson(res, 200, { reviews: [] });
+  if (error) throw error;
+  sendJson(res, 200, { reviews: data ?? [] });
+}
+
+async function createReview(req: IncomingMessage, res: ServerResponse, ctx: RequestContext) {
+  enforceRateLimit(ctx.ip, "review", 10, 60_000);
+  const user = await requireUser(req, res);
+  if (!user) return;
+
+  const body = await readJson(req);
+  const orderId = stringBody(body.orderId);
+  const rating = Math.floor(Number(body.rating));
+  const comment = stringBody(body.comment).replace(/\s+/g, " ");
+  if (!orderId) return sendJson(res, 400, { error: "INVALID_REVIEW" });
+  if (!Number.isInteger(rating) || rating < 1 || rating > 5) return sendJson(res, 400, { error: "INVALID_RATING" });
+  if (comment.length < 4 || comment.length > 800) return sendJson(res, 400, { error: "INVALID_REVIEW_COMMENT" });
+
+  const { data: order, error } = await adminDb
+    .from("orders")
+    .select("id,user_id,invoice_number,product_id,product_name,variant_name,payment_status,delivery_status")
+    .eq("id", orderId)
+    .maybeSingle();
+  if (error) throw error;
+  if (!order) return sendJson(res, 404, { error: "INVOICE_NOT_FOUND" });
+  if (order.user_id !== user.id) return sendJson(res, 403, { error: "FORBIDDEN" });
+  if (order.payment_status !== "PAID" || order.delivery_status !== "DELIVERED") {
+    return sendJson(res, 400, { error: "REVIEW_NOT_ALLOWED" });
+  }
+
+  const { data: existing, error: existingError } = await adminDb.from("product_reviews").select("id").eq("order_id", order.id).maybeSingle();
+  if (isMissingProductReviewsTable(existingError)) return sendJson(res, 503, { error: "REVIEW_SCHEMA_REQUIRED" });
+  if (existingError) throw existingError;
+
+  const now = new Date().toISOString();
+  const displayName = publicDisplayName(user);
+  const { data, error: upsertError } = await adminDb
+    .from("product_reviews")
+    .upsert(
+      {
+        id: existing?.id ?? uid("rev"),
+        order_id: order.id,
+        user_id: user.id,
+        invoice_number: order.invoice_number,
+        product_id: order.product_id,
+        product_name: order.product_name,
+        variant_name: order.variant_name,
+        rating,
+        comment,
+        display_name: displayName,
+        is_public: true,
+        updated_at: now
+      },
+      { onConflict: "order_id" }
+    )
+    .select("*")
+    .single();
+  if (isMissingProductReviewsTable(upsertError)) return sendJson(res, 503, { error: "REVIEW_SCHEMA_REQUIRED" });
+  if (upsertError) throw upsertError;
+
+  sendJson(res, existing ? 200 : 201, { review: data });
 }
 
 async function createWarrantyClaim(req: IncomingMessage, res: ServerResponse, ctx: RequestContext) {
@@ -455,6 +620,33 @@ async function adminLogin(req: IncomingMessage, res: ServerResponse, ctx: Reques
   sendJson(res, 200, { token: signAdminToken(admin.id, admin.username), admin: { id: admin.id, username: admin.username } });
 }
 
+async function adminProducts(req: IncomingMessage, res: ServerResponse) {
+  const admin = await requireAdmin(req, res);
+  if (!admin) return;
+
+  const { data, error } = await adminDb.from("products").select("*, product_variants(*)").order("name");
+  if (error) throw error;
+
+  const { data: stockRows, error: stockError } = await adminDb
+    .from("account_stocks")
+    .select("product_variant_id,status")
+    .eq("status", "AVAILABLE");
+  if (stockError) throw stockError;
+
+  const stockCounts = new Map<string, number>();
+  for (const row of stockRows ?? []) stockCounts.set(row.product_variant_id, (stockCounts.get(row.product_variant_id) ?? 0) + 1);
+
+  sendJson(res, 200, {
+    products: (data ?? []).map((product: any) => ({
+      ...product,
+      variants: (product.product_variants ?? []).map((variant: any) => ({
+        ...variant,
+        stock: stockCounts.get(variant.id) ?? 0
+      }))
+    }))
+  });
+}
+
 async function adminOrders(req: IncomingMessage, res: ServerResponse) {
   const admin = await requireAdmin(req, res);
   if (!admin) return;
@@ -476,7 +668,174 @@ async function adminAnalytics(req: IncomingMessage, res: ServerResponse) {
   const delivered = (orders ?? []).filter((order: any) => order.delivery_status === "DELIVERED").length;
   const conversion = orders?.length ? Math.round((delivered / orders.length) * 100) : 0;
   const availableStock = (stockRows ?? []).filter((stock: any) => stock.status === "AVAILABLE").length;
-  sendJson(res, 200, { totalRevenue, conversion, availableStock, orderCount: orders?.length ?? 0 });
+  const waitingPayment = (orders ?? []).filter((order: any) => order.payment_status === "WAITING_PAYMENT").length;
+  const needRestock = (orders ?? []).filter((order: any) => order.delivery_status === "NEED_RESTOCK").length;
+  const today = new Date().toISOString().slice(0, 10);
+  const todayRevenue = paidOrders
+    .filter((order: any) => String(order.paid_at ?? order.created_at).slice(0, 10) === today)
+    .reduce((sum: number, order: any) => sum + Number(order.total), 0);
+  sendJson(res, 200, { totalRevenue, todayRevenue, conversion, availableStock, orderCount: orders?.length ?? 0, waitingPayment, needRestock });
+}
+
+async function adminWalletSummary(req: IncomingMessage, res: ServerResponse) {
+  const admin = await requireAdmin(req, res);
+  if (!admin) return;
+
+  const { data, error } = await adminDb
+    .from("wallet_ledger")
+    .select("id,user_id,kind,amount,status,created_at,settled_at")
+    .order("created_at", { ascending: false })
+    .limit(5000);
+  if (error) throw error;
+
+  const summaries = new Map<
+    string,
+    {
+      user_id: string;
+      balance: number;
+      settled_credit: number;
+      settled_debit: number;
+      topup: number;
+      refund: number;
+      adjustment: number;
+      payment: number;
+      pending_topup: number;
+      failed_topup: number;
+      last_activity: string;
+    }
+  >();
+
+  for (const row of data ?? []) {
+    const userId = String(row.user_id);
+    const existing =
+      summaries.get(userId) ??
+      {
+        user_id: userId,
+        balance: 0,
+        settled_credit: 0,
+        settled_debit: 0,
+        topup: 0,
+        refund: 0,
+        adjustment: 0,
+        payment: 0,
+        pending_topup: 0,
+        failed_topup: 0,
+        last_activity: String(row.created_at)
+      };
+    const amount = Number(row.amount) || 0;
+    const kind = String(row.kind);
+    const status = String(row.status);
+    if (String(row.created_at).localeCompare(existing.last_activity) > 0) existing.last_activity = String(row.created_at);
+
+    if (status === "SETTLED") {
+      if (kind === "PAYMENT") {
+        existing.payment += amount;
+        existing.settled_debit += amount;
+        existing.balance -= amount;
+      } else {
+        if (kind === "TOPUP") existing.topup += amount;
+        if (kind === "REFUND") existing.refund += amount;
+        if (kind === "ADJUSTMENT") existing.adjustment += amount;
+        existing.settled_credit += amount;
+        existing.balance += amount;
+      }
+    }
+    if (kind === "TOPUP" && status === "PENDING") existing.pending_topup += amount;
+    if (kind === "TOPUP" && status === "FAILED") existing.failed_topup += amount;
+    summaries.set(userId, existing);
+  }
+
+  sendJson(res, 200, {
+    customers: Array.from(summaries.values()).sort((left, right) => right.last_activity.localeCompare(left.last_activity))
+  });
+}
+
+async function adminWalletLedger(req: IncomingMessage, res: ServerResponse, ctx: RequestContext) {
+  const admin = await requireAdmin(req, res);
+  if (!admin) return;
+  const limit = Math.min(Math.max(Math.floor(Number(ctx.url.searchParams.get("limit")) || 300), 1), 1000);
+  const { data, error } = await adminDb
+    .from("wallet_ledger")
+    .select("*")
+    .order("created_at", { ascending: false })
+    .limit(limit);
+  if (error) throw error;
+  sendJson(res, 200, { ledger: data ?? [] });
+}
+
+async function adminWalletAdjustment(req: IncomingMessage, res: ServerResponse) {
+  const admin = await requireAdmin(req, res);
+  if (!admin) return;
+  const body = await readJson(req);
+  const userId = stringBody(body.userId);
+  const direction = (stringBody(body.direction) || stringBody(body.mode)).toUpperCase();
+  const amount = Math.floor(Number(body.amount) || 0);
+  const note = stringBody(body.note);
+
+  if (!isUuid(userId)) return sendJson(res, 400, { error: "WALLET_USER_REQUIRED" });
+  if (!["CREDIT", "DEBIT"].includes(direction) || amount <= 0) {
+    return sendJson(res, 400, { error: "INVALID_WALLET_ADJUSTMENT" });
+  }
+
+  const { data: targetUser, error: userError } = await adminDb.auth.admin.getUserById(userId);
+  if (userError || !targetUser.user) return sendJson(res, 404, { error: "WALLET_USER_NOT_FOUND" });
+
+  const { data, error } = await adminDb.rpc("admin_adjust_wallet", {
+    p_admin_id: admin.id,
+    p_user_id: userId,
+    p_direction: direction,
+    p_amount: amount,
+    p_note: note
+  });
+  if (error?.message.includes("INSUFFICIENT_BALANCE")) return sendJson(res, 409, { error: "INSUFFICIENT_BALANCE" });
+  if (error?.message.includes("INVALID_WALLET_ADJUSTMENT")) return sendJson(res, 400, { error: "INVALID_WALLET_ADJUSTMENT" });
+  if (error) throw error;
+
+  sendJson(res, 201, { ledger: data });
+}
+
+async function adminPromos(req: IncomingMessage, res: ServerResponse) {
+  const admin = await requireAdmin(req, res);
+  if (!admin) return;
+  const { data, error } = await adminDb.from("promo_codes").select("*").order("created_at", { ascending: false });
+  if (error) throw error;
+  sendJson(res, 200, { promos: data ?? [] });
+}
+
+async function adminCreatePromo(req: IncomingMessage, res: ServerResponse) {
+  const admin = await requireAdmin(req, res);
+  if (!admin) return;
+  const body = await readJson(req);
+  const row = promoPayload(body);
+  const { data, error } = await adminDb.from("promo_codes").insert(row).select("*").single();
+  if (error) throw error;
+  await audit(admin.id, "CREATE_PROMO", "promo", row.code, {});
+  sendJson(res, 201, { promo: data });
+}
+
+async function adminUpdatePromo(req: IncomingMessage, res: ServerResponse, ctx: RequestContext) {
+  const admin = await requireAdmin(req, res);
+  if (!admin) return;
+  const body = await readJson(req);
+  const code = ctx.params[0].toUpperCase();
+  const row = promoPayload(body, true);
+  const { data, error } = await adminDb.from("promo_codes").update(row).eq("code", code).select("*").single();
+  if (error) throw error;
+  await audit(admin.id, "UPDATE_PROMO", "promo", code, {});
+  sendJson(res, 200, { promo: data });
+}
+
+async function adminAuditLogs(req: IncomingMessage, res: ServerResponse, ctx: RequestContext) {
+  const admin = await requireAdmin(req, res);
+  if (!admin) return;
+  const limit = Math.min(Math.max(Math.floor(Number(ctx.url.searchParams.get("limit")) || 200), 1), 500);
+  const { data, error } = await adminDb
+    .from("audit_logs")
+    .select("id,admin_id,action,entity_type,entity_id,metadata_json,created_at")
+    .order("created_at", { ascending: false })
+    .limit(limit);
+  if (error) throw error;
+  sendJson(res, 200, { logs: data ?? [] });
 }
 
 async function adminWarrantyClaims(req: IncomingMessage, res: ServerResponse) {
@@ -558,6 +917,53 @@ async function adminUpdateVariant(req: IncomingMessage, res: ServerResponse, ctx
   sendJson(res, 200, { variant: data });
 }
 
+async function adminReplaceOrderAccounts(req: IncomingMessage, res: ServerResponse, ctx: RequestContext) {
+  const admin = await requireAdmin(req, res);
+  if (!admin) return;
+  const invoiceNumber = ctx.params[0];
+  const { data, error } = await adminDb.rpc("replace_order_accounts", {
+    p_invoice_number: invoiceNumber,
+    p_admin_id: admin.id
+  });
+  if (error?.message.includes("ORDER_NOT_FOUND")) return sendJson(res, 404, { error: "ORDER_NOT_FOUND" });
+  if (error?.message.includes("REPLACEMENT_NOT_ALLOWED")) return sendJson(res, 400, { error: "REPLACEMENT_NOT_ALLOWED" });
+  if (error?.message.includes("REPLACEMENT_NOT_AVAILABLE")) return sendJson(res, 409, { error: "REPLACEMENT_NOT_AVAILABLE" });
+  if (error) throw error;
+  sendJson(res, 200, { replaced: true, accounts: decryptDeliveredRows(data ?? []) });
+}
+
+async function adminReviewWarranty(req: IncomingMessage, res: ServerResponse, ctx: RequestContext) {
+  const admin = await requireAdmin(req, res);
+  if (!admin) return;
+  const claimId = ctx.params[0];
+  const { data, error } = await adminDb
+    .from("warranty_claims")
+    .update({ status: "IN_REVIEW" })
+    .eq("id", claimId)
+    .in("status", ["OPEN", "IN_REVIEW"])
+    .select("*")
+    .single();
+  if (error) throw error;
+  await audit(admin.id, "REVIEW_WARRANTY_CLAIM", "warranty", claimId, { invoiceNumber: data.invoice_number });
+  sendJson(res, 200, { claim: data });
+}
+
+async function adminRejectWarranty(req: IncomingMessage, res: ServerResponse, ctx: RequestContext) {
+  const admin = await requireAdmin(req, res);
+  if (!admin) return;
+  const claimId = ctx.params[0];
+  const { data, error } = await adminDb
+    .from("warranty_claims")
+    .update({ status: "REJECTED", resolved_at: new Date().toISOString() })
+    .eq("id", claimId)
+    .in("status", ["OPEN", "IN_REVIEW"])
+    .select("*")
+    .single();
+  if (error) throw error;
+  await audit(admin.id, "REJECT_WARRANTY_CLAIM", "warranty", claimId, { invoiceNumber: data.invoice_number });
+  sendJson(res, 200, { claim: data });
+}
+
 async function adminRefundWarranty(req: IncomingMessage, res: ServerResponse, ctx: RequestContext) {
   const admin = await requireAdmin(req, res);
   if (!admin) return;
@@ -596,20 +1002,6 @@ async function adminSendRestockAlerts(req: IncomingMessage, res: ServerResponse)
   sendJson(res, 200, { sent, alerts });
 }
 
-async function reservePromoCode(code: string | null) {
-  if (!code) return false;
-  const { data, error } = await adminDb.rpc("reserve_promo_code", { p_code: code });
-  if (error) throw error;
-  if (data !== true) throw httpError(400, "INVALID_PROMO");
-  return true;
-}
-
-async function releasePromoCode(code: string | null) {
-  if (!code) return;
-  const { error } = await adminDb.rpc("release_promo_code", { p_code: code });
-  if (error) console.error("Failed to release promo reservation", error);
-}
-
 async function assertGatewayWebhookMatches(invoice: NormalizedXenditInvoice) {
   const { data: order, error } = await adminDb
     .from("orders")
@@ -624,16 +1016,35 @@ async function assertGatewayWebhookMatches(invoice: NormalizedXenditInvoice) {
 }
 
 async function assertTopupWebhookMatches(invoice: NormalizedXenditInvoice) {
-  const { data: ledger, error } = await adminDb
+  let { data: ledger, error } = await adminDb
     .from("wallet_ledger")
     .select("id,kind,amount,status,payment_reference,xendit_invoice_id")
     .eq("xendit_invoice_id", invoice.xenditInvoiceId)
     .eq("kind", "TOPUP")
     .maybeSingle();
   if (error) throw error;
+  if (!ledger) {
+    const fallback = await adminDb
+      .from("wallet_ledger")
+      .select("id,kind,amount,status,payment_reference,xendit_invoice_id")
+      .eq("payment_reference", invoice.externalId)
+      .eq("kind", "TOPUP")
+      .maybeSingle();
+    if (fallback.error) throw fallback.error;
+    ledger = fallback.data;
+  }
   if (!ledger) throw httpError(400, "WEBHOOK_TOPUP_NOT_FOUND");
   if (ledger.status === "PENDING" && ledger.payment_reference !== invoice.externalId) throw httpError(400, "WEBHOOK_INVOICE_MISMATCH");
+  if (ledger.xendit_invoice_id && ledger.xendit_invoice_id !== invoice.xenditInvoiceId) throw httpError(400, "WEBHOOK_INVOICE_MISMATCH");
   assertWebhookAmount(Number(ledger.amount), invoice);
+  if (!ledger.xendit_invoice_id) {
+    const { error: updateError } = await adminDb
+      .from("wallet_ledger")
+      .update({ xendit_invoice_id: invoice.xenditInvoiceId })
+      .eq("id", ledger.id)
+      .is("xendit_invoice_id", null);
+    if (updateError) throw updateError;
+  }
 }
 
 async function markInvoiceExpiredOrFailed(invoice: NormalizedXenditInvoice) {
@@ -649,22 +1060,19 @@ async function markInvoiceExpiredOrFailed(invoice: NormalizedXenditInvoice) {
 
   const { data: order, error } = await adminDb
     .from("orders")
-    .select("id,payment_status,promo_code,promo_reserved_at")
+    .select("id")
     .eq("invoice_number", invoice.externalId)
     .eq("xendit_invoice_id", invoice.xenditInvoiceId)
     .maybeSingle();
   if (error) throw error;
   if (!order) throw httpError(400, "WEBHOOK_ORDER_NOT_FOUND");
 
-  if (order.payment_status === "WAITING_PAYMENT" && order.promo_reserved_at) {
-    await releasePromoCode(order.promo_code);
-  }
-
-  await adminDb
-    .from("orders")
-    .update({ payment_status: invoice.status, delivery_status: "PENDING", promo_reserved_at: null, updated_at: new Date().toISOString() })
-    .eq("id", order.id)
-    .eq("payment_status", "WAITING_PAYMENT");
+  const { error: releaseError } = await adminDb.rpc("release_gateway_order_reservation", {
+    p_order_id: order.id,
+    p_payment_status: invoice.status,
+    p_history_text: invoice.status === "EXPIRED" ? "Invoice expired dari Xendit" : "Invoice gagal dari Xendit"
+  });
+  if (releaseError) throw releaseError;
 }
 
 function assertWebhookAmount(expectedAmount: number, invoice: NormalizedXenditInvoice) {
@@ -786,14 +1194,19 @@ async function collectLowStockAlerts() {
 }
 
 async function sendEmail(subject: string, html: string) {
-  if (!env.smtpHost || !env.smtpUser || !env.smtpPass || !env.adminAlertEmail) return false;
+  if (!env.adminAlertEmail) return false;
+  return sendEmailTo(env.adminAlertEmail, subject, html);
+}
+
+async function sendEmailTo(to: string, subject: string, html: string) {
+  if (!env.smtpHost || !env.smtpUser || !env.smtpPass || !to) return false;
   const transporter = nodemailer.createTransport({
     host: env.smtpHost,
     port: env.smtpPort,
     secure: env.smtpPort === 465,
     auth: { user: env.smtpUser, pass: env.smtpPass }
   });
-  await transporter.sendMail({ from: env.smtpUser, to: env.adminAlertEmail, subject, html });
+  await transporter.sendMail({ from: env.smtpUser, to, subject, html });
   return true;
 }
 
@@ -847,6 +1260,21 @@ function normalizeXenditPayload(payload: XenditInvoiceWebhook & { data?: any }):
 }
 
 function productPayload(body: any, partial = false) {
+  if (partial) {
+    const row: any = {};
+    if (body.id !== undefined) row.id = stringBody(body.id);
+    if (body.slug !== undefined) row.slug = stringBody(body.slug);
+    if (body.name !== undefined) row.name = stringBody(body.name);
+    if (body.category !== undefined) row.category = stringBody(body.category);
+    if (body.description !== undefined) row.description = stringBody(body.description);
+    if (body.iconLabel !== undefined) row.icon_label = stringBody(body.iconLabel);
+    if (body.seoTitle !== undefined) row.seo_title = stringBody(body.seoTitle);
+    if (body.seoDescription !== undefined) row.seo_description = stringBody(body.seoDescription);
+    if (body.isActive !== undefined) row.is_active = body.isActive !== false;
+    for (const key of Object.keys(row)) if (row[key] === undefined) delete row[key];
+    return row;
+  }
+
   const row: any = {
     id: stringBody(body.id),
     slug: stringBody(body.slug),
@@ -858,13 +1286,24 @@ function productPayload(body: any, partial = false) {
     seo_description: stringBody(body.seoDescription),
     is_active: body.isActive !== false
   };
-  if (partial) {
-    for (const key of Object.keys(row)) if (row[key] === "" || row[key] === undefined) delete row[key];
-  }
   return row;
 }
 
 function variantPayload(body: any, partial = false) {
+  if (partial) {
+    const row: any = {};
+    if (body.id !== undefined) row.id = stringBody(body.id);
+    if (body.productId !== undefined) row.product_id = stringBody(body.productId);
+    if (body.name !== undefined) row.name = stringBody(body.name);
+    if (body.durationDays !== undefined) row.duration_days = Number(body.durationDays);
+    if (body.costPrice !== undefined) row.cost_price = Number(body.costPrice);
+    if (body.sellPrice !== undefined) row.sell_price = Number(body.sellPrice);
+    if (body.lowStockThreshold !== undefined) row.low_stock_threshold = Number(body.lowStockThreshold);
+    if (body.isActive !== undefined) row.is_active = body.isActive !== false;
+    for (const key of Object.keys(row)) if (row[key] === "" || Number.isNaN(row[key])) delete row[key];
+    return row;
+  }
+
   const row: any = {
     id: stringBody(body.id),
     product_id: stringBody(body.productId),
@@ -875,8 +1314,30 @@ function variantPayload(body: any, partial = false) {
     low_stock_threshold: Number(body.lowStockThreshold ?? 2),
     is_active: body.isActive !== false
   };
-  if (partial) {
-    for (const key of Object.keys(row)) if (row[key] === "" || Number.isNaN(row[key])) delete row[key];
+  return row;
+}
+
+function promoPayload(body: any, partial = false) {
+  const row: any = {};
+  const code = stringBody(body.code).toUpperCase();
+  const label = stringBody(body.label);
+  const type = stringBody(body.type).toUpperCase();
+
+  if (!partial || code) row.code = code;
+  if (!partial || label) row.label = label;
+  if (!partial || type) row.type = type === "FIXED" ? "FIXED" : "PERCENT";
+  if (!partial || body.value !== undefined) row.value = Number(body.value);
+  if (!partial || body.minSubtotal !== undefined) row.min_subtotal = Number(body.minSubtotal ?? 0);
+  if (!partial || body.maxDiscount !== undefined) row.max_discount = nullableNumber(body.maxDiscount);
+  if (!partial || body.usageLimit !== undefined) row.usage_limit = nullableNumber(body.usageLimit);
+  if (!partial || body.startsAt !== undefined) row.starts_at = nullableDate(body.startsAt);
+  if (!partial || body.endsAt !== undefined) row.ends_at = nullableDate(body.endsAt);
+  if (!partial || body.isActive !== undefined) row.is_active = body.isActive !== false;
+  if (!partial) row.id = stringBody(body.id) || uid("promo");
+
+  for (const key of Object.keys(row)) {
+    const value = row[key];
+    if (value === "" || Number.isNaN(value)) delete row[key];
   }
   return row;
 }
@@ -887,6 +1348,12 @@ function sendRpcError(res: ServerResponse, message: string) {
   if (message.includes("INVALID_PROMO")) return sendJson(res, 400, { error: "INVALID_PROMO" });
   if (message.includes("AUTH_REQUIRED")) return sendJson(res, 401, { error: "AUTH_REQUIRED" });
   return sendJson(res, 400, { error: "REQUEST_FAILED" });
+}
+
+function isMissingProductReviewsTable(error: unknown) {
+  if (!error || typeof error !== "object") return false;
+  const maybeError = error as { code?: unknown; message?: unknown };
+  return maybeError.code === "PGRST205" && typeof maybeError.message === "string" && maybeError.message.includes("product_reviews");
 }
 
 function httpError(status: number, message: string) {
@@ -921,8 +1388,8 @@ function getIp(req: IncomingMessage) {
   const remoteAddress = normalizeIp(req.socket.remoteAddress);
   if (!env.trustProxy) return remoteAddress;
 
-  const forwarded = req.headers["x-forwarded-for"]?.toString().split(",")[0]?.trim();
   const cloudflare = req.headers["cf-connecting-ip"]?.toString().trim();
+  const forwarded = req.headers["x-forwarded-for"]?.toString().split(",")[0]?.trim();
   return normalizeIp(forwarded || cloudflare || remoteAddress);
 }
 
@@ -934,15 +1401,43 @@ function stringBody(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function publicDisplayName(user: { email?: string | null; user_metadata?: Record<string, unknown> }) {
+  const fromMetadata = stringBody(user.user_metadata?.full_name) || stringBody(user.user_metadata?.name);
+  const fromEmail = user.email?.split("@")[0]?.replace(/[._-]+/g, " ").trim() ?? "";
+  const displayName = fromMetadata || fromEmail || "Pelanggan ProByte";
+  return displayName.slice(0, 60);
+}
+
 function numberOrNull(value: unknown) {
   const numberValue = Number(value);
   return Number.isFinite(numberValue) ? numberValue : null;
+}
+
+function nullableNumber(value: unknown) {
+  if (value === null || value === undefined || value === "") return null;
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) ? numberValue : null;
+}
+
+function nullableDate(value: unknown) {
+  if (value === null || value === undefined || value === "") return null;
+  const date = new Date(String(value));
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
 }
 
 function nullableString(value: unknown) {
   if (typeof value === "string") return value.trim() || null;
   if (typeof value === "number") return String(value);
   return null;
+}
+
+function escapeHtml(value: unknown) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
 }
 
 function safeStringEqual(left: string, right: string) {
@@ -975,4 +1470,8 @@ function isValidPhone(phone: string) {
 
 function isValidEmail(email: string) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
+function isUuid(value: string) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }

@@ -19,4 +19,10 @@ For local development, expose the API server with Cloudflare Tunnel and set the 
 https://<tunnel-host>/api/xendit/webhook
 ```
 
+For production behind your own domain or Cloudflare proxy, use:
+
+```text
+https://api.your-domain.com/api/xendit/webhook
+```
+
 The backend validates the `x-callback-token` header against `XENDIT_WEBHOOK_TOKEN`.

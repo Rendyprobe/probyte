@@ -14,6 +14,7 @@ export type ProductVariant = {
   duration: string;
   price: number;
   seed: number;
+  stock?: number;
   lowStockThreshold?: number;
 };
 
@@ -23,6 +24,7 @@ export type Product = {
   initials: string;
   category: ProductCategory;
   description: string;
+  imageUrl?: string;
   seoTitle?: string;
   seoDescription?: string;
   tags: string[];
@@ -44,7 +46,7 @@ export type AccountStock = {
 
 export type PaymentStatus = "WAITING_PAYMENT" | "PAID" | "EXPIRED" | "FAILED" | "REFUNDED";
 
-export type DeliveryStatus = "PENDING" | "PROCESSING" | "DELIVERED" | "NEED_RESTOCK";
+export type DeliveryStatus = "PENDING" | "PROCESSING" | "DELIVERED" | "NEED_RESTOCK" | "FAILED_DELIVERY" | "REPLACED";
 
 export type DeliveredAccount = {
   stockId: string;
@@ -126,6 +128,33 @@ export type WarrantyClaim = {
   refundWalletLedgerId: string | null;
   createdAt: string;
   resolvedAt: string | null;
+};
+
+export type ProductReview = {
+  id: string;
+  orderId: string;
+  userId: string;
+  invoiceNumber: string;
+  productId: string;
+  productName: string;
+  variantName: string;
+  rating: number;
+  comment: string;
+  displayName: string;
+  isPublic: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type PublicReview = {
+  id: string;
+  productId: string;
+  productName: string;
+  variantName: string;
+  rating: number;
+  comment: string;
+  displayName: string;
+  createdAt: string;
 };
 
 export type DemoState = {
