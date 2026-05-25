@@ -1,44 +1,3 @@
-alter table public.orders
-  add column if not exists promo_reserved_at timestamptz;
-
-create or replace function public.reserve_promo_code(p_code text)
-returns boolean
-language plpgsql
-set search_path = public
-as $$
-begin
-  if p_code is null then
-    return true;
-  end if;
-
-  update public.promo_codes
-  set used_count = used_count + 1
-  where code = p_code
-    and is_active = true
-    and (starts_at is null or starts_at <= now())
-    and (ends_at is null or ends_at >= now())
-    and (usage_limit is null or used_count < usage_limit);
-
-  return found;
-end;
-$$;
-
-create or replace function public.release_promo_code(p_code text)
-returns void
-language plpgsql
-set search_path = public
-as $$
-begin
-  if p_code is null then
-    return;
-  end if;
-
-  update public.promo_codes
-  set used_count = greatest(used_count - 1, 0)
-  where code = p_code;
-end;
-$$;
-
 create or replace function public.create_wallet_order(
   p_order_id text,
   p_invoice_number text,
@@ -119,7 +78,7 @@ begin
 
   update public.account_stocks
   set status = 'DELIVERED', sold_order_id = p_order_id, delivered_at = now()
-  where id in (select id from selected_stocks);
+  where id in (select ss.id from selected_stocks ss);
 
   insert into public.delivered_accounts (id, order_id, account_stock_id, account_email_encrypted, account_password_encrypted)
   select encode(gen_random_bytes(12), 'hex'), p_order_id, ss.id, ss.account_email_encrypted, ss.account_password_encrypted
@@ -165,6 +124,7 @@ begin
     set payment_status = 'PAID',
         xendit_payment_id = coalesce(p_xendit_payment_id, xendit_payment_id),
         paid_at = now(),
+        promo_reserved_at = null,
         updated_at = now(),
         history = history || jsonb_build_array(jsonb_build_object('at', now(), 'text', 'Pembayaran diterima Xendit'))
     where id = target_order.id
@@ -179,15 +139,34 @@ begin
     return;
   end if;
 
-  create temporary table selected_stocks on commit drop as
+  create temporary table selected_stocks (
+    id text primary key,
+    account_email_encrypted text not null,
+    account_password_encrypted text not null
+  ) on commit drop;
+
+  insert into selected_stocks (id, account_email_encrypted, account_password_encrypted)
     select id, account_email_encrypted, account_password_encrypted
     from public.account_stocks
-    where product_variant_id = target_order.variant_id and status = 'AVAILABLE'
-    order by created_at, id
+    where reserved_order_id = target_order.id and status = 'RESERVED'
+    order by reserved_at, id
     for update skip locked
     limit target_order.qty;
 
   select count(*) into locked_count from selected_stocks;
+  if locked_count < target_order.qty then
+    insert into selected_stocks (id, account_email_encrypted, account_password_encrypted)
+      select id, account_email_encrypted, account_password_encrypted
+      from public.account_stocks
+      where product_variant_id = target_order.variant_id and status = 'AVAILABLE'
+      order by created_at, id
+      for update skip locked
+      limit target_order.qty - locked_count
+      on conflict (id) do nothing;
+
+    select count(*) into locked_count from selected_stocks;
+  end if;
+
   if locked_count < target_order.qty then
     update public.orders
     set delivery_status = 'NEED_RESTOCK',
@@ -200,8 +179,11 @@ begin
   end if;
 
   update public.account_stocks
-  set status = 'DELIVERED', sold_order_id = target_order.id, delivered_at = now()
-  where id in (select id from selected_stocks);
+  set status = 'DELIVERED',
+      sold_order_id = target_order.id,
+      reserved_order_id = null,
+      delivered_at = now()
+  where id in (select ss.id from selected_stocks ss);
 
   insert into public.delivered_accounts (id, order_id, account_stock_id, account_email_encrypted, account_password_encrypted)
   select encode(gen_random_bytes(12), 'hex'), target_order.id, ss.id, ss.account_email_encrypted, ss.account_password_encrypted
@@ -219,18 +201,181 @@ begin
 end;
 $$;
 
-revoke all on function public.wallet_balance(uuid) from public, anon, authenticated;
-revoke all on function public.reserve_promo_code(text) from public, anon, authenticated;
-revoke all on function public.release_promo_code(text) from public, anon, authenticated;
+create or replace function public.admin_adjust_wallet(
+  p_admin_id uuid,
+  p_user_id uuid,
+  p_direction text,
+  p_amount integer,
+  p_note text
+)
+returns public.wallet_ledger
+language plpgsql
+set search_path = public
+as $$
+declare
+  current_balance integer;
+  created_ledger public.wallet_ledger%rowtype;
+  normalized_direction text;
+  ledger_kind text;
+  ledger_reference text;
+begin
+  normalized_direction := upper(coalesce(p_direction, ''));
+
+  if p_admin_id is null or p_user_id is null or p_amount is null or p_amount <= 0 then
+    raise exception 'INVALID_WALLET_ADJUSTMENT';
+  end if;
+
+  if normalized_direction not in ('CREDIT', 'DEBIT') then
+    raise exception 'INVALID_WALLET_ADJUSTMENT';
+  end if;
+
+  perform pg_advisory_xact_lock(hashtext('wallet_order'), hashtext(p_user_id::text));
+
+  select public.wallet_balance(p_user_id) into current_balance;
+  if normalized_direction = 'DEBIT' and current_balance < p_amount then
+    raise exception 'INSUFFICIENT_BALANCE';
+  end if;
+
+  ledger_kind := case when normalized_direction = 'DEBIT' then 'PAYMENT' else 'ADJUSTMENT' end;
+  ledger_reference := case when normalized_direction = 'DEBIT' then 'ADMIN_DEBIT' else 'ADMIN_CREDIT' end;
+
+  insert into public.wallet_ledger (
+    id,
+    user_id,
+    kind,
+    amount,
+    status,
+    payment_reference,
+    note,
+    settled_at
+  )
+  values (
+    encode(gen_random_bytes(12), 'hex'),
+    p_user_id,
+    ledger_kind,
+    p_amount,
+    'SETTLED',
+    ledger_reference,
+    coalesce(nullif(trim(p_note), ''), 'Penyesuaian saldo admin'),
+    now()
+  )
+  returning * into created_ledger;
+
+  insert into public.audit_logs (id, admin_id, action, entity_type, entity_id, metadata_json)
+  values (
+    encode(gen_random_bytes(12), 'hex'),
+    p_admin_id,
+    'WALLET_ADJUSTMENT',
+    'wallet',
+    created_ledger.id,
+    jsonb_build_object(
+      'userId', p_user_id,
+      'direction', normalized_direction,
+      'amount', p_amount,
+      'ledgerKind', ledger_kind
+    )
+  );
+
+  return created_ledger;
+end;
+$$;
+
+create or replace function public.replace_order_accounts(
+  p_invoice_number text,
+  p_admin_id uuid
+)
+returns table (
+  order_id text,
+  account_stock_id text,
+  account_email_encrypted text,
+  account_password_encrypted text
+)
+language plpgsql
+set search_path = public
+as $$
+declare
+  target_order public.orders%rowtype;
+  locked_count integer;
+begin
+  select * into target_order
+  from public.orders
+  where invoice_number = p_invoice_number
+  for update;
+
+  if target_order.id is null then
+    raise exception 'ORDER_NOT_FOUND';
+  end if;
+
+  if target_order.payment_status <> 'PAID'
+    or target_order.delivery_status not in ('DELIVERED', 'NEED_RESTOCK', 'FAILED_DELIVERY', 'REPLACED') then
+    raise exception 'REPLACEMENT_NOT_ALLOWED';
+  end if;
+
+  create temporary table selected_stocks on commit drop as
+    select id, account_email_encrypted, account_password_encrypted
+    from public.account_stocks
+    where product_variant_id = target_order.variant_id and status = 'AVAILABLE'
+    order by created_at, id
+    for update skip locked
+    limit target_order.qty;
+
+  select count(*) into locked_count from selected_stocks;
+  if locked_count < target_order.qty then
+    raise exception 'REPLACEMENT_NOT_AVAILABLE';
+  end if;
+
+  update public.account_stocks
+  set status = 'DISABLED',
+      disabled_at = now()
+  where id in (
+    select account_stock_id
+    from public.delivered_accounts
+    where order_id = target_order.id
+  )
+    and status = 'DELIVERED';
+
+  delete from public.delivered_accounts
+  where order_id = target_order.id;
+
+  update public.account_stocks
+  set status = 'DELIVERED',
+      sold_order_id = target_order.id,
+      reserved_order_id = null,
+      delivered_at = now()
+  where id in (select ss.id from selected_stocks ss);
+
+  insert into public.delivered_accounts (id, order_id, account_stock_id, account_email_encrypted, account_password_encrypted)
+  select encode(gen_random_bytes(12), 'hex'), target_order.id, ss.id, ss.account_email_encrypted, ss.account_password_encrypted
+  from selected_stocks ss;
+
+  update public.orders
+  set delivery_status = 'DELIVERED',
+      updated_at = now(),
+      history = history || jsonb_build_array(jsonb_build_object('at', now(), 'text', 'Akun diganti oleh admin'))
+  where id = target_order.id;
+
+  insert into public.audit_logs (id, admin_id, action, entity_type, entity_id, metadata_json)
+  values (
+    encode(gen_random_bytes(12), 'hex'),
+    p_admin_id,
+    'REPLACE_ORDER_ACCOUNTS',
+    'order',
+    target_order.id,
+    jsonb_build_object('invoiceNumber', target_order.invoice_number, 'qty', target_order.qty)
+  );
+
+  return query
+    select target_order.id, ss.id, ss.account_email_encrypted, ss.account_password_encrypted
+    from selected_stocks ss;
+end;
+$$;
+
 revoke all on function public.create_wallet_order(text, text, text, uuid, text, text, text, text, integer, text, text, integer, integer, integer, integer, text, jsonb, timestamptz) from public, anon, authenticated;
 revoke all on function public.mark_gateway_order_paid_and_deliver(text, text, text) from public, anon, authenticated;
-revoke all on function public.settle_wallet_topup(text, text) from public, anon, authenticated;
-revoke all on function public.refund_warranty_to_wallet(text, uuid) from public, anon, authenticated;
+revoke all on function public.admin_adjust_wallet(uuid, uuid, text, integer, text) from public, anon, authenticated;
+revoke all on function public.replace_order_accounts(text, uuid) from public, anon, authenticated;
 
-grant execute on function public.wallet_balance(uuid) to service_role;
-grant execute on function public.reserve_promo_code(text) to service_role;
-grant execute on function public.release_promo_code(text) to service_role;
 grant execute on function public.create_wallet_order(text, text, text, uuid, text, text, text, text, integer, text, text, integer, integer, integer, integer, text, jsonb, timestamptz) to service_role;
 grant execute on function public.mark_gateway_order_paid_and_deliver(text, text, text) to service_role;
-grant execute on function public.settle_wallet_topup(text, text) to service_role;
-grant execute on function public.refund_warranty_to_wallet(text, uuid) to service_role;
+grant execute on function public.admin_adjust_wallet(uuid, uuid, text, integer, text) to service_role;
+grant execute on function public.replace_order_accounts(text, uuid) to service_role;
