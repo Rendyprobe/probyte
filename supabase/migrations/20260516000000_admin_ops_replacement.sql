@@ -63,8 +63,8 @@ begin
   where id in (select id from selected_stocks);
 
   insert into public.delivered_accounts (id, order_id, account_stock_id, account_email_encrypted, account_password_encrypted)
-  select encode(gen_random_bytes(12), 'hex'), target_order.id, id, account_email_encrypted, account_password_encrypted
-  from selected_stocks;
+  select encode(gen_random_bytes(12), 'hex'), target_order.id, ss.id, ss.account_email_encrypted, ss.account_password_encrypted
+  from selected_stocks ss;
 
   update public.orders
   set delivery_status = 'DELIVERED',
@@ -83,8 +83,8 @@ begin
   );
 
   return query
-    select target_order.id, id, selected_stocks.account_email_encrypted, selected_stocks.account_password_encrypted
-    from selected_stocks;
+    select target_order.id, ss.id, ss.account_email_encrypted, ss.account_password_encrypted
+    from selected_stocks ss;
 end;
 $$;
 
