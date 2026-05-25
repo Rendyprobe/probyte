@@ -141,7 +141,7 @@ export function AppTopbar({
       <div className="app-topbar-actions">
         <button className="theme-toggle" type="button" onClick={onThemeToggle} aria-pressed={themeMode === "dark"}>
           <Icon name="spark" />
-          <span>{themeMode === "dark" ? "Mode Terang" : "Mode Gelap"}</span>
+          <span>{themeMode === "dark" ? "Mode Terang" : "Mode Neon"}</span>
         </button>
         <div className="app-topbar-user">
           <Icon name="user" />

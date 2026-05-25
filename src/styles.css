@@ -1,4 +1,4 @@
-@import url("https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Orbitron:wght@500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Rajdhani:wght@400;500;600;700&display=swap");
 
 :root {
   --bg: #fff7ed;
@@ -3028,5 +3028,792 @@ td {
   .home-summary-grid,
   .home-highlight-grid {
     gap: 16px;
+  }
+}
+
+/* Cyberpunk neon dark mode */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #050505;
+  --bg-soft: #070b0e;
+  --surface: rgba(4, 10, 13, 0.88);
+  --surface-secondary: rgba(0, 229, 255, 0.08);
+  --primary: #00e5ff;
+  --primary-soft: rgba(0, 229, 255, 0.12);
+  --secondary: #00e5ff;
+  --secondary-soft: rgba(0, 229, 255, 0.1);
+  --accent: #ffd500;
+  --accent-soft: rgba(255, 213, 0, 0.12);
+  --purple: #ff00ff;
+  --pink: #ff4fd8;
+  --text: #e9fbff;
+  --text-secondary: #a8dbe4;
+  --text-muted: #6f99a4;
+  --border: rgba(0, 229, 255, 0.28);
+  --glass-surface: rgba(4, 10, 13, 0.82);
+  --glass-surface-strong: rgba(5, 13, 17, 0.94);
+  --glass-border: rgba(0, 229, 255, 0.34);
+  --glass-shadow: 0 0 0 1px rgba(0, 229, 255, 0.1), 0 18px 44px rgba(0, 0, 0, 0.58);
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 10px;
+  --neon-cyan: #00e5ff;
+  --neon-yellow: #ffd500;
+  --neon-magenta: #ff00ff;
+  --neon-green: #00ff9c;
+  --neon-red: #ff3b6b;
+  --neon-bg: #050505;
+  --neon-panel: rgba(4, 10, 13, 0.84);
+  --neon-panel-strong: rgba(5, 13, 17, 0.95);
+  --neon-border: rgba(0, 229, 255, 0.38);
+  --neon-border-strong: rgba(0, 229, 255, 0.62);
+  --neon-cyan-glow: 0 0 10px rgba(0, 229, 255, 0.34), 0 0 24px rgba(0, 229, 255, 0.16);
+  --neon-yellow-glow: 0 0 10px rgba(255, 213, 0, 0.34), 0 0 26px rgba(255, 213, 0, 0.18);
+  --neon-magenta-glow: 0 0 12px rgba(255, 0, 255, 0.3), 0 0 28px rgba(255, 0, 255, 0.14);
+  --shadow-soft: 0 0 0 1px rgba(0, 229, 255, 0.08), 0 10px 22px rgba(0, 0, 0, 0.4);
+  --shadow-card: 0 0 0 1px rgba(0, 229, 255, 0.12), 0 16px 38px rgba(0, 0, 0, 0.56), 0 0 26px rgba(0, 229, 255, 0.06);
+  --shadow-floating: 0 0 0 1px rgba(0, 229, 255, 0.2), 0 24px 56px rgba(0, 0, 0, 0.66), 0 0 38px rgba(0, 229, 255, 0.14);
+}
+
+:root[data-theme="dark"] body {
+  position: relative;
+  min-height: 100vh;
+  overflow-x: hidden;
+  color: var(--text);
+  background:
+    radial-gradient(circle at top left, rgba(0, 229, 255, 0.16), transparent 26rem),
+    radial-gradient(circle at bottom right, rgba(255, 0, 255, 0.1), transparent 24rem),
+    linear-gradient(180deg, #050505 0%, #050505 58%, #030607 100%);
+  font-family: "Rajdhani", "Plus Jakarta Sans", Inter, "Segoe UI", sans-serif;
+}
+
+:root[data-theme="dark"] body::before,
+:root[data-theme="dark"] body::after {
+  content: "";
+  display: block;
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+}
+
+:root[data-theme="dark"] body::before {
+  z-index: 0;
+  opacity: 0.22;
+  background-image:
+    linear-gradient(rgba(0, 229, 255, 0.16) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 229, 255, 0.1) 1px, transparent 1px),
+    linear-gradient(transparent 50%, rgba(0, 229, 255, 0.06) 51%, transparent 52%);
+  background-size: 64px 64px, 64px 64px, 100% 6px;
+  animation: cyber-grid-drift 22s linear infinite;
+}
+
+:root[data-theme="dark"] body::after {
+  z-index: 0;
+  opacity: 0.5;
+  background:
+    linear-gradient(115deg, transparent 0 58%, rgba(0, 229, 255, 0.08) 58.2%, transparent 59%),
+    radial-gradient(circle at 92% 8%, rgba(0, 229, 255, 0.18), transparent 18rem),
+    radial-gradient(circle at 8% 92%, rgba(255, 213, 0, 0.08), transparent 14rem);
+}
+
+:root[data-theme="dark"] #root {
+  position: relative;
+  z-index: 1;
+  min-height: 100vh;
+  isolation: isolate;
+}
+
+:root[data-theme="dark"] ::selection {
+  color: #050505;
+  background: var(--neon-cyan);
+}
+
+:root[data-theme="dark"] * {
+  scrollbar-color: rgba(0, 229, 255, 0.44) rgba(5, 5, 5, 0.72);
+}
+
+:root[data-theme="dark"] h1,
+:root[data-theme="dark"] h2,
+:root[data-theme="dark"] h3,
+:root[data-theme="dark"] .store-logo strong,
+:root[data-theme="dark"] .admin-sidebar-brand strong,
+:root[data-theme="dark"] .admin-login-brand strong,
+:root[data-theme="dark"] .panel-title strong,
+:root[data-theme="dark"] .section-title-row strong {
+  color: var(--text);
+  font-family: "Orbitron", "Rajdhani", Inter, sans-serif;
+  text-transform: uppercase;
+  text-shadow: 0 0 9px rgba(0, 229, 255, 0.38), 0 0 18px rgba(0, 229, 255, 0.16);
+}
+
+:root[data-theme="dark"] p,
+:root[data-theme="dark"] small,
+:root[data-theme="dark"] .muted,
+:root[data-theme="dark"] .section-desc {
+  color: var(--text-secondary);
+}
+
+:root[data-theme="dark"] .eyebrow,
+:root[data-theme="dark"] th,
+:root[data-theme="dark"] .product-app-head small,
+:root[data-theme="dark"] .catalog-product-body small,
+:root[data-theme="dark"] .field > span,
+:root[data-theme="dark"] .vault-secret-item label > span {
+  color: var(--neon-cyan);
+  font-family: "Orbitron", "Rajdhani", Inter, sans-serif;
+  text-shadow: var(--neon-cyan-glow);
+}
+
+:root[data-theme="dark"] .app-main-scroll,
+:root[data-theme="dark"] .app-footer {
+  position: relative;
+}
+
+:root[data-theme="dark"] .app-main-scroll::before {
+  content: "";
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  left: clamp(0px, 22vw, 280px);
+  width: 1px;
+  pointer-events: none;
+  opacity: 0.28;
+  background: linear-gradient(180deg, transparent, rgba(0, 229, 255, 0.74), transparent);
+  box-shadow: var(--neon-cyan-glow);
+}
+
+:root[data-theme="dark"] .store-sidebar,
+:root[data-theme="dark"] .app-topbar,
+:root[data-theme="dark"] .panel,
+:root[data-theme="dark"] .bento-card,
+:root[data-theme="dark"] .receipt-card,
+:root[data-theme="dark"] .summary-sticky-card,
+:root[data-theme="dark"] .checkout-summary-card,
+:root[data-theme="dark"] .catalog-product-card,
+:root[data-theme="dark"] .admin-sidebar,
+:root[data-theme="dark"] .admin-head,
+:root[data-theme="dark"] .modal-panel,
+:root[data-theme="dark"] .mobile-drawer,
+:root[data-theme="dark"] .support-mini,
+:root[data-theme="dark"] .command-panel,
+:root[data-theme="dark"] .flash-card,
+:root[data-theme="dark"] .info-card,
+:root[data-theme="dark"] .tone-primary,
+:root[data-theme="dark"] .tone-success,
+:root[data-theme="dark"] .tone-warning,
+:root[data-theme="dark"] .category-app-card,
+:root[data-theme="dark"] .secure-vault-card,
+:root[data-theme="dark"] .product-appstore-header,
+:root[data-theme="dark"] .testimonials-banner,
+:root[data-theme="dark"] .legal-modern-head,
+:root[data-theme="dark"] .admin-login-panel,
+:root[data-theme="dark"] .toast,
+:root[data-theme="dark"] .checkout-flow-side,
+:root[data-theme="dark"] .checkout-flow-form,
+:root[data-theme="dark"] .checkout-flow-summary,
+:root[data-theme="dark"] .product-tab-card,
+:root[data-theme="dark"] .testimonial-card,
+:root[data-theme="dark"] .legal-section-card,
+:root[data-theme="dark"] .invoice-top-card,
+:root[data-theme="dark"] .detail-item,
+:root[data-theme="dark"] .summary-card,
+:root[data-theme="dark"] .highlight-card,
+:root[data-theme="dark"] .ranking-item,
+:root[data-theme="dark"] .voucher-card,
+:root[data-theme="dark"] .contact-card,
+:root[data-theme="dark"] .profile-metrics > div,
+:root[data-theme="dark"] .balance-metrics div,
+:root[data-theme="dark"] .admin-sidebar-note,
+:root[data-theme="dark"] .integration-list > div,
+:root[data-theme="dark"] .empty-state,
+:root[data-theme="dark"] .skeleton-card {
+  border-color: var(--neon-border);
+  background:
+    linear-gradient(180deg, rgba(0, 229, 255, 0.055), transparent 38%),
+    var(--neon-panel);
+  box-shadow: var(--shadow-card);
+  backdrop-filter: blur(12px) saturate(140%);
+}
+
+:root[data-theme="dark"] .store-sidebar {
+  position: sticky;
+  border-right-color: var(--neon-border-strong);
+  box-shadow: 12px 0 32px rgba(0, 229, 255, 0.07), inset -1px 0 rgba(0, 229, 255, 0.28);
+}
+
+:root[data-theme="dark"] .app-topbar {
+  position: relative;
+  overflow: hidden;
+  border-radius: 0;
+  border-color: rgba(0, 229, 255, 0.48);
+  border-left-color: var(--neon-yellow);
+  box-shadow: var(--shadow-card), inset 0 -1px rgba(0, 229, 255, 0.24);
+}
+
+:root[data-theme="dark"] .app-topbar::after,
+:root[data-theme="dark"] .panel::after,
+:root[data-theme="dark"] .catalog-product-card::after,
+:root[data-theme="dark"] .admin-head::after,
+:root[data-theme="dark"] .modal-panel::after,
+:root[data-theme="dark"] .neon-panel::after,
+:root[data-theme="dark"] .hud-card::after {
+  content: "";
+  position: absolute;
+  inset: auto 0 0;
+  height: 1px;
+  pointer-events: none;
+  opacity: 0.72;
+  background: linear-gradient(90deg, transparent, var(--neon-cyan), transparent);
+  transform: translateX(-100%);
+  animation: hud-line-sweep 7s linear infinite;
+}
+
+:root[data-theme="dark"] .panel,
+:root[data-theme="dark"] .catalog-product-card,
+:root[data-theme="dark"] .admin-head,
+:root[data-theme="dark"] .modal-panel,
+:root[data-theme="dark"] .neon-panel,
+:root[data-theme="dark"] .hud-card {
+  position: relative;
+  overflow: hidden;
+}
+
+:root[data-theme="dark"] .panel::before,
+:root[data-theme="dark"] .catalog-product-card::before,
+:root[data-theme="dark"] .checkout-flow-form::before,
+:root[data-theme="dark"] .checkout-flow-side::before,
+:root[data-theme="dark"] .checkout-flow-summary::before,
+:root[data-theme="dark"] .neon-panel::before,
+:root[data-theme="dark"] .hud-card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.52;
+  background:
+    linear-gradient(90deg, var(--neon-cyan) 0 34px, transparent 34px calc(100% - 34px), rgba(255, 0, 255, 0.7) calc(100% - 34px) 100%) top / 100% 1px no-repeat,
+    linear-gradient(180deg, rgba(0, 229, 255, 0.48) 0 22px, transparent 22px calc(100% - 22px), rgba(255, 213, 0, 0.52) calc(100% - 22px) 100%) left / 1px 100% no-repeat;
+}
+
+:root[data-theme="dark"] .btn,
+:root[data-theme="dark"] .primary-btn,
+:root[data-theme="dark"] .secondary-btn,
+:root[data-theme="dark"] .ghost-btn,
+:root[data-theme="dark"] .danger-btn,
+:root[data-theme="dark"] .small-btn,
+:root[data-theme="dark"] .copy-btn,
+:root[data-theme="dark"] .theme-toggle,
+:root[data-theme="dark"] .product-app-buy,
+:root[data-theme="dark"] .payment-option,
+:root[data-theme="dark"] .filter-chip,
+:root[data-theme="dark"] .side-category-chip,
+:root[data-theme="dark"] .category-tab {
+  position: relative;
+  overflow: hidden;
+  border-radius: 4px;
+  border-color: rgba(0, 229, 255, 0.34);
+  font-family: "Orbitron", "Rajdhani", Inter, sans-serif;
+  text-transform: uppercase;
+}
+
+:root[data-theme="dark"] .primary-btn,
+:root[data-theme="dark"] .product-app-buy {
+  color: #080700;
+  border-color: rgba(255, 213, 0, 0.82);
+  background: linear-gradient(180deg, #ffe866, var(--neon-yellow));
+  box-shadow: var(--neon-yellow-glow), inset 0 0 0 1px rgba(255, 255, 255, 0.2);
+  text-shadow: none;
+}
+
+:root[data-theme="dark"] .primary-btn::before,
+:root[data-theme="dark"] .product-app-buy::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.52), transparent);
+  opacity: 0;
+  transform: translateX(-100%);
+}
+
+:root[data-theme="dark"] .primary-btn::after,
+:root[data-theme="dark"] .product-app-buy::after {
+  content: "";
+  position: absolute;
+  inset: 1px;
+  pointer-events: none;
+  border: 1px solid rgba(5, 5, 5, 0.44);
+  opacity: 0.7;
+  animation: neon-border-flicker 4.8s steps(2, end) infinite;
+}
+
+:root[data-theme="dark"] .secondary-btn,
+:root[data-theme="dark"] .ghost-btn,
+:root[data-theme="dark"] .small-btn,
+:root[data-theme="dark"] .copy-btn,
+:root[data-theme="dark"] .theme-toggle,
+:root[data-theme="dark"] .payment-option,
+:root[data-theme="dark"] .filter-chip,
+:root[data-theme="dark"] .side-category-chip,
+:root[data-theme="dark"] .category-tab {
+  color: var(--neon-cyan);
+  background: rgba(0, 229, 255, 0.055);
+  box-shadow: inset 0 0 0 1px rgba(0, 229, 255, 0.1);
+}
+
+:root[data-theme="dark"] .ghost-btn.danger,
+:root[data-theme="dark"] .small-btn.danger,
+:root[data-theme="dark"] .danger-btn {
+  color: #ffd7e2;
+  border-color: rgba(255, 59, 107, 0.56);
+  background: rgba(255, 59, 107, 0.12);
+  box-shadow: 0 0 18px rgba(255, 59, 107, 0.12);
+}
+
+:root[data-theme="dark"] .small-btn.warn,
+:root[data-theme="dark"] .vault-warning {
+  color: var(--neon-yellow);
+  border-color: rgba(255, 213, 0, 0.56);
+  background: rgba(255, 213, 0, 0.1);
+}
+
+@media (hover: hover) {
+  :root[data-theme="dark"] .primary-btn:hover,
+  :root[data-theme="dark"] .product-app-buy:hover {
+    transform: translateY(-2px);
+    border-color: var(--neon-cyan);
+    box-shadow: var(--neon-yellow-glow), 0 0 22px rgba(0, 229, 255, 0.28);
+  }
+
+  :root[data-theme="dark"] .primary-btn:hover::before,
+  :root[data-theme="dark"] .product-app-buy:hover::before {
+    opacity: 0.75;
+    animation: cyber-shine 900ms ease;
+  }
+
+  :root[data-theme="dark"] .secondary-btn:hover,
+  :root[data-theme="dark"] .ghost-btn:hover,
+  :root[data-theme="dark"] .small-btn:hover,
+  :root[data-theme="dark"] .copy-btn:hover,
+  :root[data-theme="dark"] .filter-chip:hover,
+  :root[data-theme="dark"] .side-category-chip:hover,
+  :root[data-theme="dark"] .payment-option:hover,
+  :root[data-theme="dark"] .category-tab:hover {
+    color: #050505;
+    border-color: var(--neon-cyan);
+    background: var(--neon-cyan);
+    box-shadow: var(--neon-cyan-glow);
+  }
+
+  :root[data-theme="dark"] .catalog-product-card:hover,
+  :root[data-theme="dark"] .product-app-card:hover,
+  :root[data-theme="dark"] .category-app-card:hover,
+  :root[data-theme="dark"] .ranking-item:hover {
+    border-color: var(--neon-border-strong);
+    box-shadow: var(--shadow-floating), 0 0 24px rgba(255, 0, 255, 0.08);
+  }
+}
+
+:root[data-theme="dark"] .side-nav-item,
+:root[data-theme="dark"] .admin-side-link,
+:root[data-theme="dark"] .mobile-bottom-item {
+  border-radius: 4px;
+  color: var(--text-secondary);
+  font-family: "Orbitron", "Rajdhani", Inter, sans-serif;
+  text-transform: uppercase;
+}
+
+:root[data-theme="dark"] .side-nav-item:hover,
+:root[data-theme="dark"] .admin-side-link:hover,
+:root[data-theme="dark"] .mobile-bottom-item:hover {
+  color: var(--neon-cyan);
+  border-color: rgba(0, 229, 255, 0.44);
+  background: rgba(0, 229, 255, 0.07);
+  box-shadow: inset 0 0 18px rgba(0, 229, 255, 0.08);
+}
+
+:root[data-theme="dark"] .side-nav-item.is-active,
+:root[data-theme="dark"] .admin-side-link.is-active,
+:root[data-theme="dark"] .mobile-bottom-item.is-active,
+:root[data-theme="dark"] .filter-chip.is-active,
+:root[data-theme="dark"] .payment-option.is-active,
+:root[data-theme="dark"] .category-tab.is-active,
+:root[data-theme="dark"] .side-category-chip.is-active {
+  color: var(--neon-cyan);
+  border-color: var(--neon-cyan);
+  background: linear-gradient(90deg, rgba(0, 229, 255, 0.18), rgba(0, 229, 255, 0.06));
+  box-shadow: var(--neon-cyan-glow), inset 3px 0 var(--neon-yellow);
+  text-shadow: var(--neon-cyan-glow);
+  animation: neon-active-flicker 5.6s steps(1, end) infinite;
+}
+
+:root[data-theme="dark"] .theme-toggle[aria-pressed="true"] {
+  color: var(--neon-yellow);
+  border-color: rgba(255, 213, 0, 0.72);
+  background: rgba(255, 213, 0, 0.1);
+  box-shadow: var(--neon-yellow-glow);
+}
+
+:root[data-theme="dark"] .app-topbar-user,
+:root[data-theme="dark"] .brand-mark,
+:root[data-theme="dark"] .site-footer button,
+:root[data-theme="dark"] .command-search,
+:root[data-theme="dark"] .field input,
+:root[data-theme="dark"] .field select,
+:root[data-theme="dark"] .field textarea,
+:root[data-theme="dark"] .field-control,
+:root[data-theme="dark"] .receipt-number,
+:root[data-theme="dark"] .receipt-instructions,
+:root[data-theme="dark"] .vault-secret-item,
+:root[data-theme="dark"] .vault-field,
+:root[data-theme="dark"] .variant-row,
+:root[data-theme="dark"] .variant-row.is-empty,
+:root[data-theme="dark"] .flash-item,
+:root[data-theme="dark"] .step-zigzag,
+:root[data-theme="dark"] .faq-accordion details,
+:root[data-theme="dark"] .checkout-selected,
+:root[data-theme="dark"] .empty-icon {
+  border-color: rgba(0, 229, 255, 0.28);
+  background: var(--neon-panel-strong);
+  box-shadow: inset 0 0 0 1px rgba(0, 229, 255, 0.06), 0 0 18px rgba(0, 229, 255, 0.06);
+}
+
+:root[data-theme="dark"] .command-search,
+:root[data-theme="dark"] .field input,
+:root[data-theme="dark"] .field select,
+:root[data-theme="dark"] .field textarea,
+:root[data-theme="dark"] .field-control,
+:root[data-theme="dark"] .neon-input {
+  border-radius: 4px;
+  color: var(--text);
+  caret-color: var(--neon-yellow);
+  background:
+    linear-gradient(90deg, rgba(0, 229, 255, 0.08), transparent 40%),
+    rgba(0, 0, 0, 0.44);
+}
+
+:root[data-theme="dark"] .command-search input,
+:root[data-theme="dark"] .field input,
+:root[data-theme="dark"] .field select,
+:root[data-theme="dark"] .field textarea,
+:root[data-theme="dark"] .field-control {
+  font-family: "Rajdhani", "Plus Jakarta Sans", Inter, sans-serif;
+}
+
+:root[data-theme="dark"] input::placeholder,
+:root[data-theme="dark"] textarea::placeholder {
+  color: rgba(168, 219, 228, 0.58);
+}
+
+:root[data-theme="dark"] option {
+  color: var(--text);
+  background: #050505;
+}
+
+:root[data-theme="dark"] .field input:focus,
+:root[data-theme="dark"] .field select:focus,
+:root[data-theme="dark"] .field textarea:focus,
+:root[data-theme="dark"] .field-control:focus,
+:root[data-theme="dark"] .command-search:focus-within,
+:root[data-theme="dark"] .neon-input:focus {
+  border-color: var(--neon-yellow);
+  box-shadow: 0 0 0 1px rgba(255, 213, 0, 0.58), 0 0 22px rgba(255, 213, 0, 0.16), inset 0 0 18px rgba(0, 229, 255, 0.08);
+}
+
+:root[data-theme="dark"] .mobile-bottom-nav {
+  border-top-color: rgba(0, 229, 255, 0.48);
+  background: rgba(4, 10, 13, 0.94);
+  box-shadow: 0 -16px 34px rgba(0, 0, 0, 0.62), 0 -1px rgba(0, 229, 255, 0.26);
+}
+
+:root[data-theme="dark"] .mobile-drawer-backdrop,
+:root[data-theme="dark"] .modal-backdrop {
+  background: rgba(0, 0, 0, 0.72);
+  backdrop-filter: blur(5px);
+}
+
+:root[data-theme="dark"] .product-app-visual,
+:root[data-theme="dark"] .product-art,
+:root[data-theme="dark"] .category-app-icon,
+:root[data-theme="dark"] .rank-number,
+:root[data-theme="dark"] .avatar {
+  border-radius: 6px;
+  color: var(--neon-cyan);
+  border-color: rgba(0, 229, 255, 0.34);
+  background:
+    linear-gradient(rgba(0, 229, 255, 0.12) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 229, 255, 0.1) 1px, transparent 1px),
+    rgba(0, 229, 255, 0.055);
+  background-size: 18px 18px;
+  box-shadow: inset 0 0 20px rgba(0, 229, 255, 0.08), var(--neon-cyan-glow);
+}
+
+:root[data-theme="dark"] .product-art img {
+  filter: saturate(1.08) contrast(1.08);
+}
+
+:root[data-theme="dark"] .brand-mark {
+  border-radius: 6px;
+  color: var(--neon-yellow);
+}
+
+:root[data-theme="dark"] .brand-mark svg rect {
+  fill: rgba(0, 229, 255, 0.12);
+  stroke: var(--neon-cyan);
+  stroke-width: 1.4;
+}
+
+:root[data-theme="dark"] .brand-mark svg path {
+  fill: var(--neon-yellow);
+  filter: drop-shadow(0 0 5px rgba(255, 213, 0, 0.62));
+}
+
+:root[data-theme="dark"] .status-badge,
+:root[data-theme="dark"] .stock-pill,
+:root[data-theme="dark"] .pill-badge,
+:root[data-theme="dark"] .rating {
+  border-radius: 4px;
+  font-family: "Orbitron", "Rajdhani", Inter, sans-serif;
+}
+
+:root[data-theme="dark"] .status-badge.neutral {
+  color: var(--text-secondary);
+  border-color: rgba(168, 219, 228, 0.24);
+  background: rgba(168, 219, 228, 0.08);
+}
+
+:root[data-theme="dark"] .status-badge.primary,
+:root[data-theme="dark"] .tone-primary {
+  color: var(--neon-cyan);
+  border-color: rgba(0, 229, 255, 0.42);
+  background: rgba(0, 229, 255, 0.1);
+}
+
+:root[data-theme="dark"] .status-badge.success,
+:root[data-theme="dark"] .stock-pill,
+:root[data-theme="dark"] .toast.success {
+  color: var(--neon-green);
+  border-color: rgba(0, 255, 156, 0.44);
+  background: rgba(0, 255, 156, 0.1);
+  box-shadow: 0 0 18px rgba(0, 255, 156, 0.09);
+}
+
+:root[data-theme="dark"] .status-badge.warning,
+:root[data-theme="dark"] .status-badge.wait,
+:root[data-theme="dark"] .rating,
+:root[data-theme="dark"] .pill-badge.hot {
+  color: var(--neon-yellow);
+  border-color: rgba(255, 213, 0, 0.5);
+  background: rgba(255, 213, 0, 0.1);
+  box-shadow: 0 0 18px rgba(255, 213, 0, 0.1);
+}
+
+:root[data-theme="dark"] .status-badge.danger,
+:root[data-theme="dark"] .status-badge.fail,
+:root[data-theme="dark"] .stock-pill.empty,
+:root[data-theme="dark"] .toast.fail {
+  color: #ffd7e2;
+  border-color: rgba(255, 59, 107, 0.56);
+  background: rgba(255, 59, 107, 0.12);
+  box-shadow: 0 0 18px rgba(255, 59, 107, 0.12);
+}
+
+:root[data-theme="dark"] .checkout-stepper li > span {
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.34);
+}
+
+:root[data-theme="dark"] .checkout-stepper li.is-active > span {
+  color: #050505;
+  border-color: var(--neon-cyan);
+  background: var(--neon-cyan);
+  box-shadow: var(--neon-cyan-glow);
+}
+
+:root[data-theme="dark"] .summary-row.total,
+:root[data-theme="dark"] .catalog-product-meta,
+:root[data-theme="dark"] .mobile-drawer-categories,
+:root[data-theme="dark"] .modal-head,
+:root[data-theme="dark"] .receipt-perforation {
+  border-color: rgba(0, 229, 255, 0.3);
+}
+
+:root[data-theme="dark"] table {
+  color: var(--text);
+}
+
+:root[data-theme="dark"] th,
+:root[data-theme="dark"] td {
+  border-color: rgba(0, 229, 255, 0.18);
+}
+
+:root[data-theme="dark"] tbody tr:hover {
+  background: rgba(0, 229, 255, 0.045);
+}
+
+:root[data-theme="dark"] code {
+  color: var(--neon-yellow);
+  text-shadow: 0 0 8px rgba(255, 213, 0, 0.22);
+}
+
+:root[data-theme="dark"] .skeleton-card span,
+:root[data-theme="dark"] .skeleton-card b,
+:root[data-theme="dark"] .skeleton-card i {
+  background: linear-gradient(90deg, rgba(0, 229, 255, 0.08), rgba(255, 213, 0, 0.1), rgba(0, 229, 255, 0.08));
+  background-size: 220% 100%;
+  animation: pulse 1.7s linear infinite;
+}
+
+.neon-panel,
+.hud-card,
+.terminal-panel {
+  border: 1px solid var(--neon-border, rgba(0, 229, 255, 0.38));
+  border-radius: var(--radius-lg, 8px);
+  background: var(--neon-panel, rgba(4, 10, 13, 0.84));
+  box-shadow: var(--shadow-card);
+  backdrop-filter: blur(12px) saturate(140%);
+}
+
+.neon-text,
+.neon-heading {
+  color: var(--neon-cyan, #00e5ff);
+  text-shadow: var(--neon-cyan-glow, 0 0 10px rgba(0, 229, 255, 0.34));
+}
+
+.neon-heading {
+  font-family: "Orbitron", "Rajdhani", Inter, sans-serif;
+  text-transform: uppercase;
+}
+
+.neon-btn,
+.cyberpunk-btn {
+  min-height: 42px;
+  border: 1px solid var(--neon-border-strong, rgba(0, 229, 255, 0.62));
+  border-radius: 4px;
+  padding: 0 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--neon-cyan, #00e5ff);
+  background: rgba(0, 229, 255, 0.06);
+  font-family: "Orbitron", "Rajdhani", Inter, sans-serif;
+  font-weight: 700;
+  text-transform: uppercase;
+  box-shadow: inset 0 0 0 1px rgba(0, 229, 255, 0.08);
+  transition: 160ms ease;
+}
+
+.neon-btn.is-accent,
+.cyberpunk-btn.is-accent {
+  color: #080700;
+  border-color: rgba(255, 213, 0, 0.82);
+  background: linear-gradient(180deg, #ffe866, var(--neon-yellow, #ffd500));
+  box-shadow: var(--neon-yellow-glow, 0 0 10px rgba(255, 213, 0, 0.34));
+}
+
+.neon-input {
+  min-height: 44px;
+  border: 1px solid var(--neon-border, rgba(0, 229, 255, 0.38));
+  border-radius: 4px;
+  padding: 0 12px;
+  color: var(--text, #e9fbff);
+  background: rgba(0, 0, 0, 0.44);
+  outline: 0;
+}
+
+.terminal-panel {
+  padding: 14px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+}
+
+.hud-divider,
+.hud-line {
+  position: relative;
+  height: 1px;
+  overflow: hidden;
+  background: rgba(0, 229, 255, 0.22);
+}
+
+.hud-divider::after,
+.hud-line::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, var(--neon-cyan, #00e5ff), transparent);
+  transform: translateX(-100%);
+  animation: hud-line-sweep 5s linear infinite;
+}
+
+@keyframes cyber-grid-drift {
+  from {
+    background-position: 0 0, 0 0, 0 0;
+  }
+  to {
+    background-position: 64px 64px, 64px 64px, 0 36px;
+  }
+}
+
+@keyframes hud-line-sweep {
+  to {
+    transform: translateX(100%);
+  }
+}
+
+@keyframes cyber-shine {
+  to {
+    transform: translateX(100%);
+  }
+}
+
+@keyframes neon-border-flicker {
+  0%,
+  78%,
+  100% {
+    opacity: 0.78;
+  }
+  80% {
+    opacity: 0.28;
+  }
+  83% {
+    opacity: 1;
+  }
+}
+
+@keyframes neon-active-flicker {
+  0%,
+  91%,
+  96%,
+  100% {
+    opacity: 1;
+  }
+  93% {
+    opacity: 0.72;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root[data-theme="dark"] body::before,
+  :root[data-theme="dark"] .app-topbar::after,
+  :root[data-theme="dark"] .panel::after,
+  :root[data-theme="dark"] .catalog-product-card::after,
+  :root[data-theme="dark"] .admin-head::after,
+  :root[data-theme="dark"] .modal-panel::after,
+  :root[data-theme="dark"] .primary-btn::after,
+  :root[data-theme="dark"] .product-app-buy::after,
+  :root[data-theme="dark"] .side-nav-item.is-active,
+  :root[data-theme="dark"] .admin-side-link.is-active,
+  :root[data-theme="dark"] .mobile-bottom-item.is-active,
+  :root[data-theme="dark"] .filter-chip.is-active,
+  :root[data-theme="dark"] .payment-option.is-active,
+  :root[data-theme="dark"] .category-tab.is-active,
+  :root[data-theme="dark"] .side-category-chip.is-active,
+  :root[data-theme="dark"] .skeleton-card span,
+  :root[data-theme="dark"] .skeleton-card b,
+  :root[data-theme="dark"] .skeleton-card i,
+  .hud-divider::after,
+  .hud-line::after {
+    animation: none;
   }
 }
