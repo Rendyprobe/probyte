@@ -1,0 +1,16 @@
+VITE_SUPABASE_URL=
+SUPABASE_SERVICE_ROLE_KEY=
+ACCOUNT_ENCRYPTION_KEY=
+STOCK_HASH_SECRET=
+ADMIN_SESSION_SECRET=
+XENDIT_SECRET_KEY=
+XENDIT_WEBHOOK_TOKEN=
+ADMIN_ALERT_EMAIL=
+PUBLIC_APP_URL=http://localhost:5173
+CORS_ORIGIN=http://localhost:5173
+TRUST_PROXY=true
+
+# Optional email provider for Cloudflare Workers.
+# SMTP/nodemailer is still used by the Node API, but Workers need an HTTP email API.
+RESEND_API_KEY=
+EMAIL_FROM=

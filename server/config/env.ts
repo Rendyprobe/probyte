@@ -1,6 +1,3 @@
-import { existsSync, readFileSync } from "node:fs";
-import path from "node:path";
-
 export type ServerEnv = {
   apiPort: number;
   corsOrigin: string;
@@ -18,28 +15,22 @@ export type ServerEnv = {
   smtpPort: number;
   smtpUser: string;
   smtpPass: string;
+  resendApiKey: string;
+  emailFrom: string;
 };
+
+type EnvSource = Record<string, string | number | boolean | undefined>;
 
 loadDotEnv();
 
-export const env: ServerEnv = {
-  apiPort: numberEnv("API_PORT", 8787),
-  corsOrigin: stringEnv("CORS_ORIGIN", "http://localhost:5173"),
-  trustProxy: booleanEnv("TRUST_PROXY", false),
-  publicAppUrl: firstStringEnv(["PUBLIC_APP_URL", "VITE_APP_PUBLIC_URL"], "http://localhost:5173"),
-  supabaseUrl: firstStringEnv(["VITE_SUPABASE_URL", "NEXT_PUBLIC_SUPABASE_URL"], ""),
-  supabaseServiceRoleKey: stringEnv("SUPABASE_SERVICE_ROLE_KEY", ""),
-  xenditSecretKey: stringEnv("XENDIT_SECRET_KEY", ""),
-  xenditWebhookToken: stringEnv("XENDIT_WEBHOOK_TOKEN", ""),
-  accountEncryptionKey: stringEnv("ACCOUNT_ENCRYPTION_KEY", ""),
-  stockHashSecret: stringEnv("STOCK_HASH_SECRET", ""),
-  adminSessionSecret: stringEnv("ADMIN_SESSION_SECRET", ""),
-  adminAlertEmail: stringEnv("ADMIN_ALERT_EMAIL", ""),
-  smtpHost: stringEnv("SMTP_HOST", ""),
-  smtpPort: numberEnv("SMTP_PORT", 587),
-  smtpUser: stringEnv("SMTP_USER", ""),
-  smtpPass: stringEnv("SMTP_PASS", "")
-};
+let envSource: EnvSource = readProcessEnv();
+
+export let env: ServerEnv = buildEnv(envSource);
+
+export function setRuntimeEnv(source: EnvSource) {
+  envSource = { ...readProcessEnv(), ...source };
+  env = buildEnv(envSource);
+}
 
 export function assertServerConfigured() {
   const missing = [
@@ -71,8 +62,50 @@ function configError(message: string) {
   return error;
 }
 
+function buildEnv(source: EnvSource): ServerEnv {
+  return {
+    apiPort: numberEnv(source, "API_PORT", 8787),
+    corsOrigin: stringEnv(source, "CORS_ORIGIN", "http://localhost:5173"),
+    trustProxy: booleanEnv(source, "TRUST_PROXY", false),
+    publicAppUrl: firstStringEnv(source, ["PUBLIC_APP_URL", "VITE_APP_PUBLIC_URL"], "http://localhost:5173"),
+    supabaseUrl: firstStringEnv(source, ["VITE_SUPABASE_URL", "NEXT_PUBLIC_SUPABASE_URL"], ""),
+    supabaseServiceRoleKey: stringEnv(source, "SUPABASE_SERVICE_ROLE_KEY", ""),
+    xenditSecretKey: stringEnv(source, "XENDIT_SECRET_KEY", ""),
+    xenditWebhookToken: stringEnv(source, "XENDIT_WEBHOOK_TOKEN", ""),
+    accountEncryptionKey: stringEnv(source, "ACCOUNT_ENCRYPTION_KEY", ""),
+    stockHashSecret: stringEnv(source, "STOCK_HASH_SECRET", ""),
+    adminSessionSecret: stringEnv(source, "ADMIN_SESSION_SECRET", ""),
+    adminAlertEmail: stringEnv(source, "ADMIN_ALERT_EMAIL", ""),
+    smtpHost: stringEnv(source, "SMTP_HOST", ""),
+    smtpPort: numberEnv(source, "SMTP_PORT", 587),
+    smtpUser: stringEnv(source, "SMTP_USER", ""),
+    smtpPass: stringEnv(source, "SMTP_PASS", ""),
+    resendApiKey: stringEnv(source, "RESEND_API_KEY", ""),
+    emailFrom: stringEnv(source, "EMAIL_FROM", "")
+  };
+}
+
+function readProcessEnv(): EnvSource {
+  if (typeof process === "undefined" || !process.env) return {};
+  return process.env as EnvSource;
+}
+
 function loadDotEnv() {
-  const file = path.resolve(process.cwd(), ".env");
+  if (typeof process === "undefined" || !process.versions?.node) return;
+
+  let readFileSync: ((file: string, encoding: "utf8") => string) | null = null;
+  let existsSync: ((file: string) => boolean) | null = null;
+  let resolve: ((...paths: string[]) => string) | null = null;
+  try {
+    const nodeRequire = eval("require") as NodeRequire;
+    ({ readFileSync, existsSync } = nodeRequire("node:fs"));
+    ({ resolve } = nodeRequire("node:path"));
+  } catch {
+    return;
+  }
+
+  if (!readFileSync || !existsSync || !resolve) return;
+  const file = resolve(process.cwd(), ".env");
   if (!existsSync(file)) return;
 
   const lines = readFileSync(file, "utf8").split(/\r?\n/);
@@ -87,24 +120,33 @@ function loadDotEnv() {
   }
 }
 
-function stringEnv(key: string, fallback: string) {
-  return process.env[key] || fallback;
+function stringEnv(source: EnvSource, key: string, fallback: string) {
+  return stringValue(source[key]) || fallback;
 }
 
-function firstStringEnv(keys: string[], fallback: string) {
+function firstStringEnv(source: EnvSource, keys: string[], fallback: string) {
   for (const key of keys) {
-    if (process.env[key]) return process.env[key] as string;
+    const value = stringValue(source[key]);
+    if (value) return value;
   }
   return fallback;
 }
 
-function numberEnv(key: string, fallback: number) {
-  const value = Number(process.env[key]);
+function numberEnv(source: EnvSource, key: string, fallback: number) {
+  const value = Number(source[key]);
   return Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
-function booleanEnv(key: string, fallback: boolean) {
-  const value = process.env[key]?.trim().toLowerCase();
+function booleanEnv(source: EnvSource, key: string, fallback: boolean) {
+  const raw = source[key];
+  if (typeof raw === "boolean") return raw;
+  const value = stringValue(raw)?.trim().toLowerCase();
   if (!value) return fallback;
   return value === "1" || value === "true" || value === "yes";
+}
+
+function stringValue(value: unknown) {
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  return "";
 }
