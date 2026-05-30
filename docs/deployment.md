@@ -21,7 +21,7 @@ VITE_APP_PUBLIC_URL=https://your-domain.com
 PUBLIC_APP_URL=https://your-domain.com
 CORS_ORIGIN=https://your-domain.com
 TRUST_PROXY=true
-VITE_SUPPORT_WHATSAPP=6281234567890
+VITE_SUPPORT_WHATSAPP=08177060377
 ```
 
 Only set `TRUST_PROXY=true` when the API is reachable exclusively through your reverse proxy, Cloudflare Tunnel, or platform load balancer. If the API is directly reachable, leave it unset so clients cannot spoof `x-forwarded-for` to bypass rate limits.

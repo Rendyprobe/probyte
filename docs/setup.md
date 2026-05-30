@@ -2,7 +2,7 @@
 
 1. Copy `.env.example` to `.env`.
 2. Fill `VITE_SUPABASE_URL`, `VITE_SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `XENDIT_SECRET_KEY`, and `XENDIT_WEBHOOK_TOKEN`.
-3. Set `VITE_SUPPORT_WHATSAPP` for the invoice support button. Use international format without `+`, for example `6281234567890`.
+3. Set `VITE_SUPPORT_WHATSAPP` for the invoice support button, for example `08177060377` or international format without `+`.
 4. Configure `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, and `ADMIN_ALERT_EMAIL` if you want invoice receipt email and restock alert email.
 5. If you deploy behind Cloudflare or a custom domain, also set `VITE_API_BASE_URL`, `VITE_APP_PUBLIC_URL`, `PUBLIC_APP_URL`, and `CORS_ORIGIN` to your live origins.
 6. Keep `VITE_DEMO_MODE=false` for production. Set it to `true` only if you intentionally want the legacy local demo data.

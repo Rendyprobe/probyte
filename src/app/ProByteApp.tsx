@@ -67,6 +67,7 @@ type ProductsResponse = {
 };
 
 const THEME_STORAGE_KEY = "probyte-theme";
+const DEFAULT_SUPPORT_WHATSAPP = "08177060377";
 
 const adminTabs: Array<{ id: AdminTab; label: string }> = [
   { id: "overview", label: "Overview" },
@@ -1139,7 +1140,7 @@ export function ProByteApp() {
   }
 
   function openWhatsappSupport(order: Order) {
-    const supportNumber = String(import.meta.env.VITE_SUPPORT_WHATSAPP || "").replace(/\D/g, "");
+    const supportNumber = whatsappLinkNumber(supportWhatsapp);
     const message = `Halo Admin ProByte, saya butuh bantuan untuk invoice ${order.invoiceNumber} (${order.productName} ${order.variantName}). Status: ${order.paymentStatus}/${order.deliveryStatus}.`;
     if (!supportNumber) {
       copyToClipboard(message);
@@ -1222,7 +1223,7 @@ export function ProByteApp() {
   };
   const topbarInfo = topbarMap[view] ?? { title: "ProByte", description: "Marketplace digital premium." };
   const invoiceHistory = session ? currentUserOrders : state.orders.slice(0, 10);
-  const supportWhatsapp = String(import.meta.env.VITE_SUPPORT_WHATSAPP || "").replace(/\D/g, "");
+  const supportWhatsapp = supportWhatsappDisplay();
 
   return (
     <AppShell
@@ -1886,6 +1887,16 @@ function anonymizeMember(identity: string) {
   const digits = identity.replace(/\D/g, "");
   if (digits.length >= 8) return `${digits.slice(0, 3)}****${digits.slice(-2)}`;
   return `${identity.slice(0, 4)}***`;
+}
+
+function supportWhatsappDisplay() {
+  return String(import.meta.env.VITE_SUPPORT_WHATSAPP || DEFAULT_SUPPORT_WHATSAPP).replace(/\D/g, "");
+}
+
+function whatsappLinkNumber(value: string) {
+  const digits = value.replace(/\D/g, "");
+  if (digits.startsWith("0")) return `62${digits.slice(1)}`;
+  return digits;
 }
 
 function rankingBadge(rank: number, totalAmount: number) {
