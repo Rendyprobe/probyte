@@ -4,5 +4,6 @@ dist/
 *.tsbuildinfo
 .env
 .env.local
+supabase/.temp/
 .agents/
 skills-lock.json

@@ -1,6 +1,5 @@
-import { IncomingMessage, ServerResponse } from "node:http";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { randomBytes, timingSafeEqual } from "node:crypto";
-import nodemailer from "nodemailer";
 import { adminDb, getUserFromBearer } from "../repositories/supabase";
 import { assertXenditConfigured, env } from "../config/env";
 import { setCors } from "../middleware/cors";
@@ -41,7 +40,14 @@ export async function route(req: IncomingMessage, res: ServerResponse) {
     return;
   }
 
-  const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+  let url: URL;
+  try {
+    url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+  } catch {
+    sendJson(res, 400, { error: "INVALID_URL" });
+    return;
+  }
+
   const ctx: RequestContext = {
     url,
     ip: getIp(req),
@@ -89,14 +95,13 @@ export async function route(req: IncomingMessage, res: ServerResponse) {
     for (const [method, pattern, handler] of routes) {
       const match = url.pathname.match(pattern);
       if (req.method === method && match) {
-        ctx.params = Object.fromEntries(match.slice(1).map((value, index) => [String(index), decodeURIComponent(value)]));
+        ctx.params = Object.fromEntries(match.slice(1).map((value, index) => [String(index), safeDecodePathParam(value)]));
         await handler(req, res, ctx);
         return;
       }
     }
   } catch (error) {
-    const status = typeof (error as { status?: unknown }).status === "number" ? ((error as { status: number }).status) : 500;
-    const message = status === 500 ? "INTERNAL_ERROR" : (error as Error).message;
+    const { status, message } = normalizeRouteError(error);
     if (status === 500) console.error(error);
     sendJson(res, status, { error: message });
     return;
@@ -143,13 +148,17 @@ async function products(_req: IncomingMessage, res: ServerResponse) {
 async function checkout(req: IncomingMessage, res: ServerResponse, ctx: RequestContext) {
   enforceRateLimit(ctx.ip, "checkout", 20, 60_000);
   const body = await readJson(req);
-  const qty = Math.max(Math.floor(Number(body.qty) || 1), 1);
+  const qty = Math.floor(Number(body.qty) || 1);
   const variantId = stringBody(body.variantId);
   const whatsapp = stringBody(body.whatsapp);
   const customerEmail = stringBody(body.email);
-  const promoCode = stringBody(body.promoCode).toUpperCase() || null;
+  const rawPromoCode = stringBody(body.promoCode);
+  const promoCode = rawPromoCode ? normalizePromoCode(rawPromoCode) : null;
   const paymentMethod = stringBody(body.paymentMethod) || "XENDIT_INVOICE";
 
+  if (!isSafeTextId(variantId)) return sendJson(res, 400, { error: "INVALID_VARIANT" });
+  if (!Number.isInteger(qty) || qty < 1 || qty > 50) return sendJson(res, 400, { error: "INVALID_QTY" });
+  if (rawPromoCode && !promoCode) return sendJson(res, 400, { error: "INVALID_PROMO" });
   if (!["XENDIT_INVOICE", "WALLET"].includes(paymentMethod)) return sendJson(res, 400, { error: "INVALID_PAYMENT_METHOD" });
   if (!isValidPhone(whatsapp)) return sendJson(res, 400, { error: "INVALID_WHATSAPP" });
   if (customerEmail && !isValidEmail(customerEmail)) return sendJson(res, 400, { error: "INVALID_EMAIL" });
@@ -417,8 +426,11 @@ async function invoice(req: IncomingMessage, res: ServerResponse, ctx: RequestCo
   enforceRateLimit(ctx.ip, "invoice", 60, 60_000);
   const invoiceNumber = ctx.params[0];
   const token = ctx.url.searchParams.get("token") ?? "";
-  const user = await getUserFromBearer(req.headers.authorization);
 
+  if (!isSafeInvoiceNumber(invoiceNumber)) return sendJson(res, 400, { error: "INVALID_INVOICE" });
+  if (token && !isSafeToken(token)) return sendJson(res, 403, { error: "INVALID_INVOICE_TOKEN" });
+
+  const user = await getUserFromBearer(req.headers.authorization);
   const { data: order, error } = await adminDb.from("orders").select("*").eq("invoice_number", invoiceNumber).maybeSingle();
   if (error) throw error;
   if (!order) return sendJson(res, 404, { error: "INVOICE_NOT_FOUND" });
@@ -440,8 +452,11 @@ async function sendInvoiceReceipt(req: IncomingMessage, res: ServerResponse, ctx
   const invoiceNumber = ctx.params[0];
   const body = await readJson(req);
   const token = stringBody(body.invoiceToken);
-  const user = await getUserFromBearer(req.headers.authorization);
 
+  if (!isSafeInvoiceNumber(invoiceNumber)) return sendJson(res, 400, { error: "INVALID_INVOICE" });
+  if (token && !isSafeToken(token)) return sendJson(res, 403, { error: "INVALID_INVOICE_TOKEN" });
+
+  const user = await getUserFromBearer(req.headers.authorization);
   const { data: order, error } = await adminDb.from("orders").select("*").eq("invoice_number", invoiceNumber).maybeSingle();
   if (error) throw error;
   if (!order) return sendJson(res, 404, { error: "INVOICE_NOT_FOUND" });
@@ -488,6 +503,8 @@ async function sendInvoiceReceipt(req: IncomingMessage, res: ServerResponse, ctx
 async function publicReviews(_req: IncomingMessage, res: ServerResponse, ctx: RequestContext) {
   const limit = Math.min(Math.max(Math.floor(Number(ctx.url.searchParams.get("limit")) || 12), 1), 50);
   const productId = ctx.url.searchParams.get("productId")?.trim();
+  if (productId && !isSafeTextId(productId)) return sendJson(res, 400, { error: "INVALID_REQUEST" });
+
   let query = adminDb
     .from("product_reviews")
     .select("id,product_id,product_name,variant_name,rating,comment,display_name,created_at")
@@ -526,7 +543,7 @@ async function createReview(req: IncomingMessage, res: ServerResponse, ctx: Requ
   const orderId = stringBody(body.orderId);
   const rating = Math.floor(Number(body.rating));
   const comment = stringBody(body.comment).replace(/\s+/g, " ");
-  if (!orderId) return sendJson(res, 400, { error: "INVALID_REVIEW" });
+  if (!isSafeTextId(orderId)) return sendJson(res, 400, { error: "INVALID_REVIEW" });
   if (!Number.isInteger(rating) || rating < 1 || rating > 5) return sendJson(res, 400, { error: "INVALID_RATING" });
   if (comment.length < 4 || comment.length > 800) return sendJson(res, 400, { error: "INVALID_REVIEW_COMMENT" });
 
@@ -583,7 +600,10 @@ async function createWarrantyClaim(req: IncomingMessage, res: ServerResponse, ct
   const invoiceNumber = stringBody(body.invoiceNumber);
   const invoiceToken = stringBody(body.invoiceToken);
   const issueSummary = stringBody(body.issueSummary);
+  if (!isSafeInvoiceNumber(invoiceNumber)) return sendJson(res, 400, { error: "INVALID_INVOICE" });
+  if (invoiceToken && !isSafeToken(invoiceToken)) return sendJson(res, 403, { error: "INVALID_INVOICE_TOKEN" });
   if (issueSummary.length < 8) return sendJson(res, 400, { error: "ISSUE_TOO_SHORT" });
+  if (issueSummary.length > 1000) return sendJson(res, 400, { error: "INVALID_REQUEST" });
 
   const { data: order, error } = await adminDb.from("orders").select("*").eq("invoice_number", invoiceNumber).maybeSingle();
   if (error) throw error;
@@ -611,6 +631,8 @@ async function adminLogin(req: IncomingMessage, res: ServerResponse, ctx: Reques
   const body = await readJson(req);
   const username = stringBody(body.username).trim();
   const password = stringBody(body.password);
+
+  if (username.length > 80 || password.length > 200) return sendJson(res, 401, { error: "INVALID_CREDENTIALS" });
 
   const { data: admin } = await adminDb.from("admin_users").select("*").eq("username", username).eq("is_active", true).maybeSingle();
   const valid = admin ? await verifyPassword(password, admin.password_hash) : false;
@@ -770,7 +792,7 @@ async function adminWalletAdjustment(req: IncomingMessage, res: ServerResponse) 
   const userId = stringBody(body.userId);
   const direction = (stringBody(body.direction) || stringBody(body.mode)).toUpperCase();
   const amount = Math.floor(Number(body.amount) || 0);
-  const note = stringBody(body.note);
+  const note = stringBody(body.note).slice(0, 500);
 
   if (!isUuid(userId)) return sendJson(res, 400, { error: "WALLET_USER_REQUIRED" });
   if (!["CREDIT", "DEBIT"].includes(direction) || amount <= 0) {
@@ -807,6 +829,7 @@ async function adminCreatePromo(req: IncomingMessage, res: ServerResponse) {
   if (!admin) return;
   const body = await readJson(req);
   const row = promoPayload(body);
+  if (!isValidPromoPayload(row)) return sendJson(res, 400, { error: "INVALID_PROMO" });
   const { data, error } = await adminDb.from("promo_codes").insert(row).select("*").single();
   if (error) throw error;
   await audit(admin.id, "CREATE_PROMO", "promo", row.code, {});
@@ -818,7 +841,9 @@ async function adminUpdatePromo(req: IncomingMessage, res: ServerResponse, ctx: 
   if (!admin) return;
   const body = await readJson(req);
   const code = ctx.params[0].toUpperCase();
+  if (!isSafePromoCode(code)) return sendJson(res, 400, { error: "INVALID_PROMO" });
   const row = promoPayload(body, true);
+  if (!isValidPromoPayload(row, true)) return sendJson(res, 400, { error: "INVALID_PROMO" });
   const { data, error } = await adminDb.from("promo_codes").update(row).eq("code", code).select("*").single();
   if (error) throw error;
   await audit(admin.id, "UPDATE_PROMO", "promo", code, {});
@@ -851,6 +876,7 @@ async function adminStocks(req: IncomingMessage, res: ServerResponse) {
   if (!admin) return;
   const body = await readJson(req);
   const variantId = stringBody(body.variantId);
+  if (!isSafeTextId(variantId)) return sendJson(res, 400, { error: "INVALID_VARIANT" });
   const rows = Array.isArray(body.rows) ? body.rows : [];
   const inserts = rows
     .map((row: any) => ({ email: String(row.email ?? "").trim(), password: String(row.password ?? "") }))
@@ -880,6 +906,7 @@ async function adminCreateProduct(req: IncomingMessage, res: ServerResponse) {
   if (!admin) return;
   const body = await readJson(req);
   const row = productPayload(body);
+  if (!isValidProductPayload(row)) return sendJson(res, 400, { error: "INVALID_REQUEST" });
   const { data, error } = await adminDb.from("products").insert(row).select("*").single();
   if (error) throw error;
   await audit(admin.id, "CREATE_PRODUCT", "product", row.id, {});
@@ -890,7 +917,10 @@ async function adminUpdateProduct(req: IncomingMessage, res: ServerResponse, ctx
   const admin = await requireAdmin(req, res);
   if (!admin) return;
   const body = await readJson(req);
-  const { data, error } = await adminDb.from("products").update(productPayload(body, true)).eq("id", ctx.params[0]).select("*").single();
+  if (!isSafeTextId(ctx.params[0])) return sendJson(res, 400, { error: "INVALID_REQUEST" });
+  const row = productPayload(body, true);
+  if (!isValidProductPayload(row, true)) return sendJson(res, 400, { error: "INVALID_REQUEST" });
+  const { data, error } = await adminDb.from("products").update(row).eq("id", ctx.params[0]).select("*").single();
   if (error) throw error;
   await audit(admin.id, "UPDATE_PRODUCT", "product", ctx.params[0], {});
   sendJson(res, 200, { product: data });
@@ -901,6 +931,7 @@ async function adminCreateVariant(req: IncomingMessage, res: ServerResponse) {
   if (!admin) return;
   const body = await readJson(req);
   const row = variantPayload(body);
+  if (!isValidVariantPayload(row)) return sendJson(res, 400, { error: "INVALID_VARIANT" });
   const { data, error } = await adminDb.from("product_variants").insert(row).select("*").single();
   if (error) throw error;
   await audit(admin.id, "CREATE_VARIANT", "variant", row.id, {});
@@ -911,7 +942,10 @@ async function adminUpdateVariant(req: IncomingMessage, res: ServerResponse, ctx
   const admin = await requireAdmin(req, res);
   if (!admin) return;
   const body = await readJson(req);
-  const { data, error } = await adminDb.from("product_variants").update(variantPayload(body, true)).eq("id", ctx.params[0]).select("*").single();
+  if (!isSafeTextId(ctx.params[0])) return sendJson(res, 400, { error: "INVALID_VARIANT" });
+  const row = variantPayload(body, true);
+  if (!isValidVariantPayload(row, true)) return sendJson(res, 400, { error: "INVALID_VARIANT" });
+  const { data, error } = await adminDb.from("product_variants").update(row).eq("id", ctx.params[0]).select("*").single();
   if (error) throw error;
   await audit(admin.id, "UPDATE_VARIANT", "variant", ctx.params[0], {});
   sendJson(res, 200, { variant: data });
@@ -921,6 +955,7 @@ async function adminReplaceOrderAccounts(req: IncomingMessage, res: ServerRespon
   const admin = await requireAdmin(req, res);
   if (!admin) return;
   const invoiceNumber = ctx.params[0];
+  if (!isSafeInvoiceNumber(invoiceNumber)) return sendJson(res, 400, { error: "INVALID_INVOICE" });
   const { data, error } = await adminDb.rpc("replace_order_accounts", {
     p_invoice_number: invoiceNumber,
     p_admin_id: admin.id
@@ -936,6 +971,7 @@ async function adminReviewWarranty(req: IncomingMessage, res: ServerResponse, ct
   const admin = await requireAdmin(req, res);
   if (!admin) return;
   const claimId = ctx.params[0];
+  if (!isSafeTextId(claimId)) return sendJson(res, 400, { error: "INVALID_CLAIM" });
   const { data, error } = await adminDb
     .from("warranty_claims")
     .update({ status: "IN_REVIEW" })
@@ -952,6 +988,7 @@ async function adminRejectWarranty(req: IncomingMessage, res: ServerResponse, ct
   const admin = await requireAdmin(req, res);
   if (!admin) return;
   const claimId = ctx.params[0];
+  if (!isSafeTextId(claimId)) return sendJson(res, 400, { error: "INVALID_CLAIM" });
   const { data, error } = await adminDb
     .from("warranty_claims")
     .update({ status: "REJECTED", resolved_at: new Date().toISOString() })
@@ -968,6 +1005,7 @@ async function adminRefundWarranty(req: IncomingMessage, res: ServerResponse, ct
   const admin = await requireAdmin(req, res);
   if (!admin) return;
   const claimId = ctx.params[0];
+  if (!isSafeTextId(claimId)) return sendJson(res, 400, { error: "INVALID_CLAIM" });
   const { data, error } = await adminDb.rpc("refund_warranty_to_wallet", {
     p_claim_id: claimId,
     p_admin_id: admin.id
@@ -1199,7 +1237,26 @@ async function sendEmail(subject: string, html: string) {
 }
 
 async function sendEmailTo(to: string, subject: string, html: string) {
+  if (env.resendApiKey && (env.emailFrom || env.smtpUser) && to) {
+    const response = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${env.resendApiKey}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        from: env.emailFrom || env.smtpUser,
+        to,
+        subject,
+        html
+      })
+    });
+    return response.ok;
+  }
+
+  if (isCloudflareWorkerRuntime()) return false;
   if (!env.smtpHost || !env.smtpUser || !env.smtpPass || !to) return false;
+  const nodemailer = await importNodemailer();
   const transporter = nodemailer.createTransport({
     host: env.smtpHost,
     port: env.smtpPort,
@@ -1208,6 +1265,15 @@ async function sendEmailTo(to: string, subject: string, html: string) {
   });
   await transporter.sendMail({ from: env.smtpUser, to, subject, html });
   return true;
+}
+
+async function importNodemailer() {
+  const dynamicImport = new Function("specifier", "return import(specifier)") as (specifier: string) => Promise<typeof import("nodemailer")>;
+  return dynamicImport("nodemailer");
+}
+
+function isCloudflareWorkerRuntime() {
+  return typeof globalThis !== "undefined" && "WebSocketPair" in globalThis;
 }
 
 function decryptDeliveredRows(rows: any[]) {
@@ -1319,7 +1385,7 @@ function variantPayload(body: any, partial = false) {
 
 function promoPayload(body: any, partial = false) {
   const row: any = {};
-  const code = stringBody(body.code).toUpperCase();
+  const code = normalizePromoCode(stringBody(body.code));
   const label = stringBody(body.label);
   const type = stringBody(body.type).toUpperCase();
 
@@ -1342,6 +1408,31 @@ function promoPayload(body: any, partial = false) {
   return row;
 }
 
+function normalizeRouteError(error: unknown) {
+  const explicitStatus = typeof (error as { status?: unknown }).status === "number" ? (error as { status: number }).status : 0;
+  if (explicitStatus >= 400 && explicitStatus <= 599) {
+    return { status: explicitStatus, message: explicitStatus === 500 ? "INTERNAL_ERROR" : (error as Error).message };
+  }
+
+  const databaseStatus = databaseInputErrorStatus(error);
+  if (databaseStatus) {
+    return {
+      status: databaseStatus,
+      message: databaseStatus === 409 ? "REQUEST_CONFLICT" : "INVALID_REQUEST"
+    };
+  }
+
+  return { status: 500, message: "INTERNAL_ERROR" };
+}
+
+function databaseInputErrorStatus(error: unknown) {
+  if (!error || typeof error !== "object") return 0;
+  const code = String((error as { code?: unknown }).code ?? "");
+  if (code === "23505") return 409;
+  if (["22P02", "22007", "22008", "23502", "23503", "23514", "PGRST100", "PGRST116"].includes(code)) return 400;
+  return 0;
+}
+
 function sendRpcError(res: ServerResponse, message: string) {
   if (message.includes("INSUFFICIENT_BALANCE")) return sendJson(res, 409, { error: "INSUFFICIENT_BALANCE" });
   if (message.includes("INSUFFICIENT_STOCK")) return sendJson(res, 409, { error: "INSUFFICIENT_STOCK" });
@@ -1360,6 +1451,14 @@ function httpError(status: number, message: string) {
   const error = new Error(message) as Error & { status?: number };
   error.status = status;
   return error;
+}
+
+function safeDecodePathParam(value: string) {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    throw httpError(400, "INVALID_URL");
+  }
 }
 
 async function readJson(req: IncomingMessage) {
@@ -1399,6 +1498,104 @@ function headerMap(req: IncomingMessage) {
 
 function stringBody(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function isSafeTextId(value: string) {
+  return /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value);
+}
+
+function isSafeInvoiceNumber(value: string) {
+  return /^PBY-[0-9]{8}-[A-F0-9]{8}$/.test(value);
+}
+
+function isSafeToken(value: string) {
+  return /^[a-f0-9]{48}$/i.test(value);
+}
+
+function normalizePromoCode(value: string) {
+  const code = value.toUpperCase();
+  return isSafePromoCode(code) ? code : "";
+}
+
+function isSafePromoCode(value: string) {
+  return /^[A-Z0-9][A-Z0-9_-]{0,39}$/.test(value);
+}
+
+function isValidProductPayload(row: Record<string, unknown>, partial = false) {
+  if (partial && !Object.keys(row).length) return false;
+  if (typeof row.id === "string" && !isSafeTextId(row.id)) return false;
+  if (!partial && typeof row.id !== "string") return false;
+  if (typeof row.slug === "string" && !/^[a-z0-9][a-z0-9-]{0,79}$/.test(row.slug)) return false;
+  if (!partial && typeof row.slug !== "string") return false;
+  return requiredText(row, "name", partial, 1, 120)
+    && requiredText(row, "category", partial, 1, 80)
+    && requiredText(row, "description", partial, 1, 2000)
+    && requiredText(row, "icon_label", partial, 1, 12)
+    && optionalText(row, "seo_title", 120)
+    && optionalText(row, "seo_description", 240);
+}
+
+function isValidVariantPayload(row: Record<string, unknown>, partial = false) {
+  if (partial && !Object.keys(row).length) return false;
+  if (typeof row.id === "string" && !isSafeTextId(row.id)) return false;
+  if (!partial && typeof row.id !== "string") return false;
+  if (typeof row.product_id === "string" && !isSafeTextId(row.product_id)) return false;
+  if (!partial && typeof row.product_id !== "string") return false;
+  return requiredText(row, "name", partial, 1, 120)
+    && positiveInt(row, "duration_days", partial)
+    && nonNegativeInt(row, "cost_price", partial)
+    && nonNegativeInt(row, "sell_price", partial)
+    && nonNegativeInt(row, "low_stock_threshold", partial);
+}
+
+function isValidPromoPayload(row: Record<string, unknown>, partial = false) {
+  if (partial && !Object.keys(row).length) return false;
+  if (typeof row.id === "string" && !isSafeTextId(row.id)) return false;
+  if (typeof row.code === "string" && !isSafePromoCode(row.code)) return false;
+  if (!partial && typeof row.code !== "string") return false;
+  if (!["PERCENT", "FIXED", undefined].includes(row.type as string | undefined)) return false;
+  return requiredText(row, "label", partial, 1, 120)
+    && positiveInt(row, "value", partial)
+    && nonNegativeInt(row, "min_subtotal", partial)
+    && nullableNonNegativeInt(row, "max_discount")
+    && nullablePositiveInt(row, "usage_limit")
+    && nullableDateString(row, "starts_at")
+    && nullableDateString(row, "ends_at");
+}
+
+function requiredText(row: Record<string, unknown>, key: string, partial: boolean, min: number, max: number) {
+  if (row[key] === undefined) return partial;
+  return typeof row[key] === "string" && row[key].length >= min && row[key].length <= max;
+}
+
+function optionalText(row: Record<string, unknown>, key: string, max: number) {
+  if (row[key] === undefined || row[key] === null) return true;
+  return typeof row[key] === "string" && row[key].length <= max;
+}
+
+function positiveInt(row: Record<string, unknown>, key: string, partial: boolean) {
+  if (row[key] === undefined) return partial;
+  return Number.isInteger(row[key]) && Number(row[key]) > 0;
+}
+
+function nonNegativeInt(row: Record<string, unknown>, key: string, partial: boolean) {
+  if (row[key] === undefined) return partial;
+  return Number.isInteger(row[key]) && Number(row[key]) >= 0;
+}
+
+function nullablePositiveInt(row: Record<string, unknown>, key: string) {
+  if (row[key] === undefined || row[key] === null) return true;
+  return Number.isInteger(row[key]) && Number(row[key]) > 0;
+}
+
+function nullableNonNegativeInt(row: Record<string, unknown>, key: string) {
+  if (row[key] === undefined || row[key] === null) return true;
+  return Number.isInteger(row[key]) && Number(row[key]) >= 0;
+}
+
+function nullableDateString(row: Record<string, unknown>, key: string) {
+  if (row[key] === undefined || row[key] === null) return true;
+  return typeof row[key] === "string" && !Number.isNaN(new Date(row[key]).getTime());
 }
 
 function publicDisplayName(user: { email?: string | null; user_metadata?: Record<string, unknown> }) {

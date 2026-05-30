@@ -6,6 +6,9 @@
     "dev": "vite --host 0.0.0.0",
     "api:dev": "tsx watch server/app.ts",
     "api:start": "tsx server/app.ts",
+    "worker:dev": "wrangler dev --local",
+    "worker:deploy": "wrangler deploy",
+    "pages:deploy": "VITE_API_BASE_URL=https://probyte-api.rendy221205.workers.dev npm run build && CLOUDFLARE_ACCOUNT_ID=23651db9beb4921628aa52560523f25f CF_ACCOUNT_ID=23651db9beb4921628aa52560523f25f wrangler pages deploy dist --project-name probyte --branch production --commit-dirty=true",
     "admin:create": "tsx server/create-admin.ts",
     "stock:seed-demo": "tsx server/seed-demo-stocks.ts",
     "build": "tsc --noEmit && vite build",
@@ -29,6 +32,7 @@
     "@types/react-dom": "^19.2.3",
     "@types/ws": "^8.18.1",
     "tsx": "^4.21.0",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "wrangler": "^4.86.0"
   }
 }

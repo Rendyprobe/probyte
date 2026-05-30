@@ -1,44 +1,3 @@
-alter table public.orders
-  add column if not exists promo_reserved_at timestamptz;
-
-create or replace function public.reserve_promo_code(p_code text)
-returns boolean
-language plpgsql
-set search_path = public
-as $$
-begin
-  if p_code is null then
-    return true;
-  end if;
-
-  update public.promo_codes
-  set used_count = used_count + 1
-  where code = p_code
-    and is_active = true
-    and (starts_at is null or starts_at <= now())
-    and (ends_at is null or ends_at >= now())
-    and (usage_limit is null or used_count < usage_limit);
-
-  return found;
-end;
-$$;
-
-create or replace function public.release_promo_code(p_code text)
-returns void
-language plpgsql
-set search_path = public
-as $$
-begin
-  if p_code is null then
-    return;
-  end if;
-
-  update public.promo_codes
-  set used_count = greatest(used_count - 1, 0)
-  where code = p_code;
-end;
-$$;
-
 create or replace function public.create_wallet_order(
   p_order_id text,
   p_invoice_number text,
@@ -66,7 +25,7 @@ returns table (
   account_password_encrypted text
 )
 language plpgsql
-set search_path = public
+set search_path = public, extensions
 as $$
 declare
   current_balance integer;
@@ -84,10 +43,13 @@ begin
   end if;
 
   create temporary table selected_stocks on commit drop as
-    select id, account_email_encrypted, account_password_encrypted
-    from public.account_stocks
-    where product_variant_id = p_variant_id and status = 'AVAILABLE'
-    order by created_at, id
+    select
+      stock.id,
+      stock.account_email_encrypted,
+      stock.account_password_encrypted
+    from public.account_stocks stock
+    where stock.product_variant_id = p_variant_id and stock.status = 'AVAILABLE'
+    order by stock.created_at, stock.id
     for update skip locked
     limit p_qty;
 
@@ -119,7 +81,7 @@ begin
 
   update public.account_stocks
   set status = 'DELIVERED', sold_order_id = p_order_id, delivered_at = now()
-  where id in (select id from selected_stocks);
+  where id in (select ss.id from selected_stocks ss);
 
   insert into public.delivered_accounts (id, order_id, account_stock_id, account_email_encrypted, account_password_encrypted)
   select encode(gen_random_bytes(12), 'hex'), p_order_id, ss.id, ss.account_email_encrypted, ss.account_password_encrypted
@@ -144,7 +106,7 @@ returns table (
   account_password_encrypted text
 )
 language plpgsql
-set search_path = public
+set search_path = public, extensions
 as $$
 declare
   target_order public.orders%rowtype;
@@ -165,6 +127,7 @@ begin
     set payment_status = 'PAID',
         xendit_payment_id = coalesce(p_xendit_payment_id, xendit_payment_id),
         paid_at = now(),
+        promo_reserved_at = null,
         updated_at = now(),
         history = history || jsonb_build_array(jsonb_build_object('at', now(), 'text', 'Pembayaran diterima Xendit'))
     where id = target_order.id
@@ -179,15 +142,40 @@ begin
     return;
   end if;
 
-  create temporary table selected_stocks on commit drop as
-    select id, account_email_encrypted, account_password_encrypted
-    from public.account_stocks
-    where product_variant_id = target_order.variant_id and status = 'AVAILABLE'
-    order by created_at, id
+  create temporary table selected_stocks (
+    id text primary key,
+    account_email_encrypted text not null,
+    account_password_encrypted text not null
+  ) on commit drop;
+
+  insert into selected_stocks (id, account_email_encrypted, account_password_encrypted)
+    select
+      stock.id,
+      stock.account_email_encrypted,
+      stock.account_password_encrypted
+    from public.account_stocks stock
+    where stock.reserved_order_id = target_order.id and stock.status = 'RESERVED'
+    order by stock.reserved_at, stock.id
     for update skip locked
     limit target_order.qty;
 
   select count(*) into locked_count from selected_stocks;
+  if locked_count < target_order.qty then
+    insert into selected_stocks (id, account_email_encrypted, account_password_encrypted)
+      select
+        stock.id,
+        stock.account_email_encrypted,
+        stock.account_password_encrypted
+      from public.account_stocks stock
+      where stock.product_variant_id = target_order.variant_id and stock.status = 'AVAILABLE'
+      order by stock.created_at, stock.id
+      for update skip locked
+      limit target_order.qty - locked_count
+      on conflict (id) do nothing;
+
+    select count(*) into locked_count from selected_stocks;
+  end if;
+
   if locked_count < target_order.qty then
     update public.orders
     set delivery_status = 'NEED_RESTOCK',
@@ -200,8 +188,11 @@ begin
   end if;
 
   update public.account_stocks
-  set status = 'DELIVERED', sold_order_id = target_order.id, delivered_at = now()
-  where id in (select id from selected_stocks);
+  set status = 'DELIVERED',
+      sold_order_id = target_order.id,
+      reserved_order_id = null,
+      delivered_at = now()
+  where id in (select ss.id from selected_stocks ss);
 
   insert into public.delivered_accounts (id, order_id, account_stock_id, account_email_encrypted, account_password_encrypted)
   select encode(gen_random_bytes(12), 'hex'), target_order.id, ss.id, ss.account_email_encrypted, ss.account_password_encrypted
@@ -219,18 +210,103 @@ begin
 end;
 $$;
 
-revoke all on function public.wallet_balance(uuid) from public, anon, authenticated;
-revoke all on function public.reserve_promo_code(text) from public, anon, authenticated;
-revoke all on function public.release_promo_code(text) from public, anon, authenticated;
+create or replace function public.replace_order_accounts(
+  p_invoice_number text,
+  p_admin_id uuid
+)
+returns table (
+  order_id text,
+  account_stock_id text,
+  account_email_encrypted text,
+  account_password_encrypted text
+)
+language plpgsql
+set search_path = public, extensions
+as $$
+declare
+  target_order public.orders%rowtype;
+  locked_count integer;
+begin
+  select * into target_order
+  from public.orders
+  where invoice_number = p_invoice_number
+  for update;
+
+  if target_order.id is null then
+    raise exception 'ORDER_NOT_FOUND';
+  end if;
+
+  if target_order.payment_status <> 'PAID'
+    or target_order.delivery_status not in ('DELIVERED', 'NEED_RESTOCK', 'FAILED_DELIVERY', 'REPLACED') then
+    raise exception 'REPLACEMENT_NOT_ALLOWED';
+  end if;
+
+  create temporary table selected_stocks on commit drop as
+    select
+      stock.id,
+      stock.account_email_encrypted,
+      stock.account_password_encrypted
+    from public.account_stocks stock
+    where stock.product_variant_id = target_order.variant_id and stock.status = 'AVAILABLE'
+    order by stock.created_at, stock.id
+    for update skip locked
+    limit target_order.qty;
+
+  select count(*) into locked_count from selected_stocks;
+  if locked_count < target_order.qty then
+    raise exception 'REPLACEMENT_NOT_AVAILABLE';
+  end if;
+
+  update public.account_stocks
+  set status = 'DISABLED',
+      disabled_at = now()
+  where id in (
+    select account_stock_id
+    from public.delivered_accounts
+    where order_id = target_order.id
+  )
+    and status = 'DELIVERED';
+
+  delete from public.delivered_accounts
+  where order_id = target_order.id;
+
+  update public.account_stocks
+  set status = 'DELIVERED',
+      sold_order_id = target_order.id,
+      reserved_order_id = null,
+      delivered_at = now()
+  where id in (select ss.id from selected_stocks ss);
+
+  insert into public.delivered_accounts (id, order_id, account_stock_id, account_email_encrypted, account_password_encrypted)
+  select encode(gen_random_bytes(12), 'hex'), target_order.id, ss.id, ss.account_email_encrypted, ss.account_password_encrypted
+  from selected_stocks ss;
+
+  update public.orders
+  set delivery_status = 'DELIVERED',
+      updated_at = now(),
+      history = history || jsonb_build_array(jsonb_build_object('at', now(), 'text', 'Akun diganti oleh admin'))
+  where id = target_order.id;
+
+  insert into public.audit_logs (id, admin_id, action, entity_type, entity_id, metadata_json)
+  values (
+    encode(gen_random_bytes(12), 'hex'),
+    p_admin_id,
+    'REPLACE_ORDER_ACCOUNTS',
+    'order',
+    target_order.id,
+    jsonb_build_object('invoiceNumber', target_order.invoice_number, 'qty', target_order.qty)
+  );
+
+  return query
+    select target_order.id, ss.id, ss.account_email_encrypted, ss.account_password_encrypted
+    from selected_stocks ss;
+end;
+$$;
+
 revoke all on function public.create_wallet_order(text, text, text, uuid, text, text, text, text, integer, text, text, integer, integer, integer, integer, text, jsonb, timestamptz) from public, anon, authenticated;
 revoke all on function public.mark_gateway_order_paid_and_deliver(text, text, text) from public, anon, authenticated;
-revoke all on function public.settle_wallet_topup(text, text) from public, anon, authenticated;
-revoke all on function public.refund_warranty_to_wallet(text, uuid) from public, anon, authenticated;
+revoke all on function public.replace_order_accounts(text, uuid) from public, anon, authenticated;
 
-grant execute on function public.wallet_balance(uuid) to service_role;
-grant execute on function public.reserve_promo_code(text) to service_role;
-grant execute on function public.release_promo_code(text) to service_role;
 grant execute on function public.create_wallet_order(text, text, text, uuid, text, text, text, text, integer, text, text, integer, integer, integer, integer, text, jsonb, timestamptz) to service_role;
 grant execute on function public.mark_gateway_order_paid_and_deliver(text, text, text) to service_role;
-grant execute on function public.settle_wallet_topup(text, text) to service_role;
-grant execute on function public.refund_warranty_to_wallet(text, uuid) to service_role;
+grant execute on function public.replace_order_accounts(text, uuid) to service_role;

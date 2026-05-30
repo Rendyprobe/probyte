@@ -327,7 +327,7 @@ create or replace function public.wallet_balance(p_user_id uuid)
 returns integer
 language sql
 stable
-set search_path = public
+set search_path = public, extensions
 as $$
   select coalesce(sum(
     case
@@ -343,7 +343,7 @@ $$;
 create or replace function public.reserve_promo_code(p_code text)
 returns boolean
 language plpgsql
-set search_path = public
+set search_path = public, extensions
 as $$
 begin
   if p_code is null then
@@ -365,7 +365,7 @@ $$;
 create or replace function public.release_promo_code(p_code text)
 returns void
 language plpgsql
-set search_path = public
+set search_path = public, extensions
 as $$
 begin
   if p_code is null then
@@ -400,7 +400,7 @@ create or replace function public.create_gateway_order_with_reservation(
 )
 returns void
 language plpgsql
-set search_path = public
+set search_path = public, extensions
 as $$
 declare
   locked_count integer;
@@ -410,10 +410,10 @@ begin
   end if;
 
   create temporary table selected_stocks on commit drop as
-    select id
-    from public.account_stocks
-    where product_variant_id = p_variant_id and status = 'AVAILABLE'
-    order by created_at, id
+    select stock.id
+    from public.account_stocks stock
+    where stock.product_variant_id = p_variant_id and stock.status = 'AVAILABLE'
+    order by stock.created_at, stock.id
     for update skip locked
     limit p_qty;
 
@@ -444,7 +444,7 @@ begin
   set status = 'RESERVED',
       reserved_order_id = p_order_id,
       reserved_at = now()
-  where id in (select id from selected_stocks);
+  where id in (select ss.id from selected_stocks ss);
 end;
 $$;
 
@@ -455,7 +455,7 @@ create or replace function public.release_gateway_order_reservation(
 )
 returns void
 language plpgsql
-set search_path = public
+set search_path = public, extensions
 as $$
 declare
   target_order public.orders%rowtype;
@@ -527,7 +527,7 @@ returns table (
   account_password_encrypted text
 )
 language plpgsql
-set search_path = public
+set search_path = public, extensions
 as $$
 declare
   current_balance integer;
@@ -545,10 +545,13 @@ begin
   end if;
 
   create temporary table selected_stocks on commit drop as
-    select id, account_email_encrypted, account_password_encrypted
-    from public.account_stocks
-    where product_variant_id = p_variant_id and status = 'AVAILABLE'
-    order by created_at, id
+    select
+      stock.id,
+      stock.account_email_encrypted,
+      stock.account_password_encrypted
+    from public.account_stocks stock
+    where stock.product_variant_id = p_variant_id and stock.status = 'AVAILABLE'
+    order by stock.created_at, stock.id
     for update skip locked
     limit p_qty;
 
@@ -580,15 +583,15 @@ begin
 
   update public.account_stocks
   set status = 'DELIVERED', sold_order_id = p_order_id, delivered_at = now()
-  where id in (select id from selected_stocks);
+  where id in (select ss.id from selected_stocks ss);
 
   insert into public.delivered_accounts (id, order_id, account_stock_id, account_email_encrypted, account_password_encrypted)
-  select encode(gen_random_bytes(12), 'hex'), p_order_id, id, account_email_encrypted, account_password_encrypted
-  from selected_stocks;
+  select encode(gen_random_bytes(12), 'hex'), p_order_id, ss.id, ss.account_email_encrypted, ss.account_password_encrypted
+  from selected_stocks ss;
 
   return query
-    select p_order_id, id, selected_stocks.account_email_encrypted, selected_stocks.account_password_encrypted
-    from selected_stocks;
+    select p_order_id, ss.id, ss.account_email_encrypted, ss.account_password_encrypted
+    from selected_stocks ss;
 end;
 $$;
 
@@ -605,7 +608,7 @@ returns table (
   account_password_encrypted text
 )
 language plpgsql
-set search_path = public
+set search_path = public, extensions
 as $$
 declare
   target_order public.orders%rowtype;
@@ -649,20 +652,26 @@ begin
   ) on commit drop;
 
   insert into selected_stocks (id, account_email_encrypted, account_password_encrypted)
-    select id, account_email_encrypted, account_password_encrypted
-    from public.account_stocks
-    where reserved_order_id = target_order.id and status = 'RESERVED'
-    order by reserved_at, id
+    select
+      stock.id,
+      stock.account_email_encrypted,
+      stock.account_password_encrypted
+    from public.account_stocks stock
+    where stock.reserved_order_id = target_order.id and stock.status = 'RESERVED'
+    order by stock.reserved_at, stock.id
     for update skip locked
     limit target_order.qty;
 
   select count(*) into locked_count from selected_stocks;
   if locked_count < target_order.qty then
     insert into selected_stocks (id, account_email_encrypted, account_password_encrypted)
-      select id, account_email_encrypted, account_password_encrypted
-      from public.account_stocks
-      where product_variant_id = target_order.variant_id and status = 'AVAILABLE'
-      order by created_at, id
+      select
+        stock.id,
+        stock.account_email_encrypted,
+        stock.account_password_encrypted
+      from public.account_stocks stock
+      where stock.product_variant_id = target_order.variant_id and stock.status = 'AVAILABLE'
+      order by stock.created_at, stock.id
       for update skip locked
       limit target_order.qty - locked_count
       on conflict (id) do nothing;
@@ -686,11 +695,11 @@ begin
       sold_order_id = target_order.id,
       reserved_order_id = null,
       delivered_at = now()
-  where id in (select id from selected_stocks);
+  where id in (select ss.id from selected_stocks ss);
 
   insert into public.delivered_accounts (id, order_id, account_stock_id, account_email_encrypted, account_password_encrypted)
-  select encode(gen_random_bytes(12), 'hex'), target_order.id, id, account_email_encrypted, account_password_encrypted
-  from selected_stocks;
+  select encode(gen_random_bytes(12), 'hex'), target_order.id, ss.id, ss.account_email_encrypted, ss.account_password_encrypted
+  from selected_stocks ss;
 
   update public.orders
   set delivery_status = 'DELIVERED',
@@ -699,8 +708,8 @@ begin
   where id = target_order.id;
 
   return query
-    select target_order.id, 'DELIVERED'::text, selected_stocks.id, selected_stocks.account_email_encrypted, selected_stocks.account_password_encrypted
-    from selected_stocks;
+    select target_order.id, 'DELIVERED'::text, ss.id, ss.account_email_encrypted, ss.account_password_encrypted
+    from selected_stocks ss;
 end;
 $$;
 
@@ -710,7 +719,7 @@ create or replace function public.settle_wallet_topup(
 )
 returns public.wallet_ledger
 language plpgsql
-set search_path = public
+set search_path = public, extensions
 as $$
 declare
   target_ledger public.wallet_ledger%rowtype;
@@ -749,7 +758,7 @@ returns table (
   invoice_number text
 )
 language plpgsql
-set search_path = public
+set search_path = public, extensions
 as $$
 declare
   target_claim public.warranty_claims%rowtype;
@@ -819,7 +828,7 @@ create or replace function public.admin_adjust_wallet(
 )
 returns public.wallet_ledger
 language plpgsql
-set search_path = public
+set search_path = public, extensions
 as $$
 declare
   current_balance integer;
@@ -900,7 +909,7 @@ returns table (
   account_password_encrypted text
 )
 language plpgsql
-set search_path = public
+set search_path = public, extensions
 as $$
 declare
   target_order public.orders%rowtype;
@@ -921,10 +930,13 @@ begin
   end if;
 
   create temporary table selected_stocks on commit drop as
-    select id, account_email_encrypted, account_password_encrypted
-    from public.account_stocks
-    where product_variant_id = target_order.variant_id and status = 'AVAILABLE'
-    order by created_at, id
+    select
+      stock.id,
+      stock.account_email_encrypted,
+      stock.account_password_encrypted
+    from public.account_stocks stock
+    where stock.product_variant_id = target_order.variant_id and stock.status = 'AVAILABLE'
+    order by stock.created_at, stock.id
     for update skip locked
     limit target_order.qty;
 
@@ -951,11 +963,11 @@ begin
       sold_order_id = target_order.id,
       reserved_order_id = null,
       delivered_at = now()
-  where id in (select id from selected_stocks);
+  where id in (select ss.id from selected_stocks ss);
 
   insert into public.delivered_accounts (id, order_id, account_stock_id, account_email_encrypted, account_password_encrypted)
-  select encode(gen_random_bytes(12), 'hex'), target_order.id, id, account_email_encrypted, account_password_encrypted
-  from selected_stocks;
+  select encode(gen_random_bytes(12), 'hex'), target_order.id, ss.id, ss.account_email_encrypted, ss.account_password_encrypted
+  from selected_stocks ss;
 
   update public.orders
   set delivery_status = 'DELIVERED',
@@ -974,8 +986,8 @@ begin
   );
 
   return query
-    select target_order.id, id, selected_stocks.account_email_encrypted, selected_stocks.account_password_encrypted
-    from selected_stocks;
+    select target_order.id, ss.id, ss.account_email_encrypted, ss.account_password_encrypted
+    from selected_stocks ss;
 end;
 $$;
 

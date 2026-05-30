@@ -1,0 +1,13 @@
+name = "probyte-api"
+main = "server/worker.ts"
+account_id = "23651db9beb4921628aa52560523f25f"
+compatibility_date = "2025-12-01"
+compatibility_flags = ["nodejs_compat"]
+
+[observability]
+enabled = true
+
+[vars]
+CORS_ORIGIN = "*"
+TRUST_PROXY = "true"
+PUBLIC_APP_URL = "https://probyte.pages.dev"
